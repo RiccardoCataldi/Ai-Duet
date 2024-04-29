@@ -35,7 +35,7 @@ class MusicGeneratorApp:
         self.is_playing = False
 
         # Imposta il percorso del file MIDI        
-        self.midi_file_path = "Recordings/output.mid"
+        self.midi_file_path = "output.mid"
 
     def generate(self):
         try:
@@ -46,7 +46,7 @@ class MusicGeneratorApp:
             return
 
         try:
-            generated = self.generator.extend_sequence(inp, max_generate_len=64, search="greedy",
+            generated = self.generator.extend_sequence(inp, max_generate_len=128, search="greedy",
                                                        top_k_notes=128, top_k_durations=128,
                                                        top_k_offset=0, beam_width=3,
                                                        creativity=0)
@@ -55,6 +55,7 @@ class MusicGeneratorApp:
             self.player = music21.midi.realtime.StreamPlayer(self.generated)
             self.player.play()
             self.is_playing = True
+            
         except Exception as e:
             print(e)
 
@@ -76,13 +77,16 @@ if __name__ == "__main__":
     codeK = Setup()
     myPort = codeK.perform_setup()
     codeK.open_port(myPort)
-    on_id = codeK.get_device_id()
+    #on_id = codeK.get_device_id()
+    on_id = 151
     print('your note on id is: ', on_id)
 
     # record
     midiRec = CK_rec(myPort, on_id, debug=False)
     codeK.set_callback(midiRec)
 
+    # set timer of 5 seconds
+    timer = time.time()
     try:
         while True:
             time.sleep(0.001)
@@ -94,5 +98,5 @@ if __name__ == "__main__":
         codeK.end()
         app.generate()
         sys.exit(0)
-  
+
            

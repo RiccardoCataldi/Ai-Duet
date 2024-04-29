@@ -15,24 +15,7 @@ class Setup(object):
             print('##'*num)
             time.sleep(0.2)
 
-    def print_welcome(self, length):
-        print('');
-        for i in range(1, 6):
-            string = "####"
-            space = " ";
-            if i == 1:
-                print(string[:4] + space + string[:1] + space*2 + string[:1] + space*4 + string[:4] + space + string[:4] + space + string[:4])
-            elif i == 2:
-                print(string[:1] + space*4 + string[:1] + space + string[:1] + space*5 + string[:1] + space*2 + string[:1] + space + string[:1] + space*4 + string[:1])
-            elif i == 3:
-                print(string[:1] + space*4 + string[:2]+ space*6 + string[:4] + space + string[:4] + space + string[:1])
-            elif i == 4:
-                print(string[:1] + space*4 + string[:1] + space + string[:1] + space*5 + string[:1] + space + string[:1] + space*2 + string[:1] + space*4 + string[:1])
-            elif i == 5:
-                print(string[:4] + space + string[:1] + space*2 + string[:1] + space*4 + string[:1] + space*2 + string[:1] + space + string[:4] + space + string[:4])
-            time.sleep(0.2)
 
-        print("\nWelcome to the Codeklavier MIDI Recorder!\n")
 
     def show_ports(self):
         print("These are your detected MIDI devices:", '\n')
@@ -96,9 +79,8 @@ class Setup(object):
                     device_id = message[0]
                     if device_id:
                         return device_id
-
+    
     def perform_setup(self):
-        self.print_welcome(20)
         self.show_ports()
         myPort = self.get_port_from_user()
         return myPort

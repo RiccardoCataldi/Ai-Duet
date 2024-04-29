@@ -50,5 +50,6 @@ class CK_rec(object):
                 self.__activesense = 0
 
     def saveTrack(self, name):
-        self.__mid.save('Recordings/'+name+'.mid')
+        #self.__mid.save('Recordings/'+name+'.mid')
+        self.__mid.save(name+'.mid')
         print("\nRecording saved as "+name+".mid in the Recordings folder\n")
