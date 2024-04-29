@@ -21,9 +21,10 @@ class CK_rec(object):
         self.__activesense = 0
 
     def prepareTrack(self):
-        input("Press [ENTER] to start recording...")
-        print("\n**** 📹 You are now RECORDING *****")
-        print("(Press Control-C to stop the recording)\n")
+        #input("Press [ENTER] to start recording...")
+        #print("\n**** 📹 You are now RECORDING *****")
+        #print("(Press Control-C to stop the recording)\n")
+        print("Recording started")
         self.__mid.tracks.append(self.__track)
 
     def __call__(self, event, data=None):
@@ -53,3 +54,7 @@ class CK_rec(object):
         #self.__mid.save('Recordings/'+name+'.mid')
         self.__mid.save(name+'.mid')
         print("\nRecording saved as "+name+".mid in the Recordings folder\n")
+    def clearTrack(self):
+        self.__mid.tracks.remove(self.__track)
+        self.__track = MidiTrack()
+        self.prepareTrack()

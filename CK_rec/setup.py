@@ -79,7 +79,7 @@ class Setup(object):
                     device_id = message[0]
                     if device_id:
                         return device_id
-    
+
     def perform_setup(self):
         self.show_ports()
         myPort = self.get_port_from_user()
