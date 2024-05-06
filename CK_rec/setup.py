@@ -15,8 +15,6 @@ class Setup(object):
             print('##'*num)
             time.sleep(0.2)
 
-
-
     def show_ports(self):
         print("These are your detected MIDI devices:", '\n')
         for port in self.__ports:

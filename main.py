@@ -1,7 +1,7 @@
 import mido
 from mido import MidiFile, MidiTrack
 from music21 import *
-
+import threading
 import os
 import rtmidi
 #import from parrentdir
@@ -33,10 +33,9 @@ class MusicGeneratorApp:
         self.sequence = None
         self.player = None
         self.is_playing = False
-
         # Imposta il percorso del file MIDI        
         self.midi_file_path = "output.mid"
-
+    
     def generate(self):
         try:
             # Carica il file MIDI e lo converte in una sequenza
@@ -49,7 +48,7 @@ class MusicGeneratorApp:
             generated = self.generator.extend_sequence(inp, max_generate_len=64, search="greedy",
                                                        top_k_notes=128, top_k_durations=128,
                                                        top_k_offset=0, beam_width=3,
-                                                       creativity=0)
+                                                       creativity=100)
             self.sequence = generated.numpy()
             self.generated = idxenc2stream(self.sequence, vocab=self.vocab)
             self.player = music21.midi.realtime.StreamPlayer(self.generated)
@@ -68,14 +67,16 @@ class MusicGeneratorApp:
             except Exception as e:
                 print(e)
 
+
 if __name__ == "__main__":
     app = MusicGeneratorApp()
     
-    input_port_name = mido.get_input_names()[0]
+    #input_port_name = mido.get_input_names()[0]
 
     # Start the Device
     codeK = Setup()
     myPort = codeK.perform_setup()
+    
     codeK.open_port(myPort)
     #on_id = codeK.get_device_id()
     on_id = 151
@@ -84,13 +85,15 @@ if __name__ == "__main__":
     # record
     midiRec = CK_rec(myPort, on_id, debug=False)
     codeK.set_callback(midiRec)
-
+    
+    
     # set timer of 5 seconds
     timer = time.time()
     try:
         while True:
-            if time.time() - timer > 2:
+            if time.time() - timer > 3:
                 midiRec.saveTrack('output')
+                midiRec.closePort()
                 app.generate()
                 timer = time.time()
                 #del output.mid

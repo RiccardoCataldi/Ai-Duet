@@ -320,3 +320,6 @@ def part_enc(chordarr, part):
 
 def avg_pitch(t, sep_idx=VALTSEP):
     return t[t[:, 0] > sep_idx][:, 0].mean()
+
+
+
