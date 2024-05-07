@@ -45,7 +45,7 @@ class MusicGeneratorApp:
             return
 
         try:
-            generated = self.generator.extend_sequence(inp, max_generate_len=64, search="greedy",
+            generated = self.generator.extend_sequence(inp, max_generate_len=128, search="greedy",
                                                        top_k_notes=128, top_k_durations=128,
                                                        top_k_offset=0, beam_width=3,
                                                        creativity=100)
@@ -91,13 +91,15 @@ if __name__ == "__main__":
     timer = time.time()
     try:
         while True:
-            if time.time() - timer > 3:
+            if time.time() - timer > 5:
                 midiRec.saveTrack('output')
                 midiRec.closePort()
                 app.generate()
                 timer = time.time()
                 #del output.mid
                 midiRec.clearTrack()
+                midiRec = CK_rec(myPort, on_id, debug=False)
+                codeK.set_callback(midiRec)
                 
     except KeyboardInterrupt:   
         

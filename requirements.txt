@@ -1,6 +1,10 @@
-tensorflow~=2.7.0
-numpy~=1.22.0
-music21~=7.1.0
-PyQt5~=5.15.6
-wandb~=0.12.9
-pygame~=2.1.2
+midi2audio==0.1.1
+mido==1.3.2
+music21==7.1.0
+numpy==1.22.4
+pyo==1.0.5
+PyQt5==5.15.10
+PyQt5_sip==12.13.0
+rtmidi==2.5.0
+tensorflow==2.7.4
+wandb==0.12.21
