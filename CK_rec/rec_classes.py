@@ -13,6 +13,7 @@ class CK_rec(object):
         self.prepareTrack()
         self.__activesense = 0
         self.setup_output()
+    
 
     def setup_output(self):
         self.__midiout = rtmidi.MidiOut()

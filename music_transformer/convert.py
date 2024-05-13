@@ -163,3 +163,7 @@ def to_valid_npenc(t):
         print('Non midi note detected. Only returning valid portion. Index, seed', invalid_idx, t.shape)
         return t[:invalid_idx]
     return t
+
+def idxenc2midi(idxenc, vocab, output_file_path, bpm=120):
+    stream = idxenc2stream(idxenc, vocab, bpm=bpm)
+    stream.write('midi', fp=output_file_path)
