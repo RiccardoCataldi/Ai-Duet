@@ -19,11 +19,15 @@ class CK_rec(object):
         self.__midiout = rtmidi.MidiOut()
         self.__ports_out = self.__midiout.get_ports()
         if self.__ports_out:
-            self.__midiout.open_port(0)  # Apri il primo dispositivo MIDI di uscita disponibile
+            self.__midiout.open_port(0)  # Open the first available MIDI output device
+            print(f"MIDI output opened on: {self.__ports_out[0]}")
     
     def play_midi_message(self, message):
-        if self.__ports_out:
-            self.__midiout.send_message(message)
+        if self.__midiout and self.__midiout.is_port_open():
+            try:
+                self.__midiout.send_message(message)
+            except Exception as e:
+                print(f"Error sending MIDI message: {e}")
 
     def prepareTrack(self):
         print("Recording started")
@@ -62,3 +66,11 @@ class CK_rec(object):
         self.__mid.tracks.remove(self.__track)
         self.__track = MidiTrack()
         self.prepareTrack()
+
+    def play_external_midi(self, midi_file):
+        try:
+            mid = MidiFile(midi_file)
+            for msg in mid.play():
+                self.play_midi_message(msg.bytes())
+        except Exception as e:
+            print(f"Error playing external MIDI: {e}")

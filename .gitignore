@@ -3,6 +3,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# MIDI files
+*.mid
+*.midi
+temp_generated_*.mid
+output.mid
+
 # C extensions
 *.so
 

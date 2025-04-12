@@ -25,23 +25,35 @@ from music_transformer.vocab import MusicVocab
 
 
 class MusicGeneratorApp:
-    def __init__(self):
-        model = tf.saved_model.load('trained_models/decoder_only_smaller_1024_mega_ds')
-        self.generator = MusicGenerator(model)
+    def __init__(self, midi_recorder):
+        try:
+            model = tf.saved_model.load('trained_models/decoder_only_smaller_1024_mega_ds')
+            self.generator = MusicGenerator(model)
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            print("Please make sure the model file exists in the trained_models directory")
+            self.generator = None
         self.vocab = MusicVocab.create()
         self.generated = None
         self.sequence = None
         self.player = None
         self.is_playing = False
-        # Imposta il percorso del file MIDI        
+        self.midi_recorder = midi_recorder
         self.midi_file_path = "output.mid"
     
     def generate(self):
+        if self.generator is None:
+            print("Cannot generate music: model not loaded")
+            return
+            
         try:
-            # Carica il file MIDI e lo converte in una sequenza
+            # Load MIDI file and convert to sequence
             inp = midi2idxenc(self.midi_file_path, self.vocab, add_eos=False)
+            if len(inp) == 0:
+                print("No valid MIDI data to generate from")
+                return
         except Exception as e:
-            print(e)
+            print(f"Error converting MIDI: {e}")
             return
 
         try:
@@ -51,12 +63,17 @@ class MusicGeneratorApp:
                                                        creativity=100)
             self.sequence = generated.numpy()
             self.generated = idxenc2stream(self.sequence, vocab=self.vocab)
-            self.player = music21.midi.realtime.StreamPlayer(self.generated)
-            self.player.play()
+            
+            # Save the generated music to a temporary MIDI file
+            temp_midi = f"temp_generated_{int(time.time())}.mid"
+            self.generated.write('midi', fp=temp_midi)
+            
+            # Play the generated music through MIDI output
+            self.midi_recorder.play_external_midi(temp_midi)
             self.is_playing = True
             
         except Exception as e:
-            print(e)
+            print(f"Error generating music: {e}")
 
     def save_to_file(self):
         if self.generated is not None:
@@ -69,39 +86,39 @@ class MusicGeneratorApp:
 
 
 if __name__ == "__main__":
-    app = MusicGeneratorApp()
-    
-    #input_port_name = mido.get_input_names()[0]
-
     # Start the Device
     codeK = Setup()
     myPort = codeK.perform_setup()
-    
     codeK.open_port(myPort)
-    #on_id = codeK.get_device_id()
     on_id = 151
     print('your note on id is: ', on_id)
 
-    # record
+    # Initialize MIDI recorder
     midiRec = CK_rec(myPort, on_id, debug=False)
     codeK.set_callback(midiRec)
     
+    # Initialize app with MIDI recorder
+    app = MusicGeneratorApp(midiRec)
     
-    # set timer of 5 seconds
-    timer = time.time()
+    def generate_and_play():
+        while True:
+            try:
+                midiRec.saveTrack('output')
+                app.generate()
+                midiRec.clearTrack()
+                time.sleep(5)  # Wait 5 seconds before next generation
+            except Exception as e:
+                print(f"Error in generation thread: {e}")
+    
+    # Start generation thread
+    generation_thread = threading.Thread(target=generate_and_play, daemon=True)
+    generation_thread.start()
+    
     try:
         while True:
-            if time.time() - timer > 5:
-                midiRec.saveTrack('output')
-                midiRec.closePort()
-                app.generate()
-                timer = time.time()
-                midiRec.clearTrack()
-                midiRec = CK_rec(myPort, on_id, debug=False)
-                codeK.set_callback(midiRec)
+            time.sleep(0.1)  # Keep main thread alive
                 
     except KeyboardInterrupt:   
-        
         codeK.end()
         app.save_to_file()
         print('Recording Stopped')
