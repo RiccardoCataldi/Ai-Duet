@@ -1,0 +1,25 @@
+---
+alwaysApply: true
+---
+Rule:
+Always generate lightweight, minimal, and production-ready code.
+
+Guidelines:
+
+Implement only what the user explicitly requests.
+
+Do not add extra utilities, abstractions, comments, or setup code unless the user asks.
+
+Avoid creating new files unless strictly necessary to fulfill the request.
+
+Code should be ready for production use — correct, efficient, and clean.
+
+Prefer fewer lines of code and simpler solutions over verbose or over-engineered ones.
+
+Do not include placeholder or demo code (e.g. mock data, test scaffolds) unless requested.
+
+Goal:
+
+Deliver the smallest possible, high-quality implementation that satisfies the user’s request exactly — nothing more.
+
+The less code the better

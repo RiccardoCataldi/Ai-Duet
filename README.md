@@ -20,17 +20,24 @@ An interactive AI music generation system that responds to MIDI keyboard input i
 
 ## Dependencies
 
-The project requires several Python packages. Install them using:
-
-```bash
-pip install -r requirements.txt
-```
+The project requires several Python packages listed in `requirements.txt`. See the Setup section for installation instructions.
 
 ## Setup
 
-1. Connect your MIDI keyboard/controller to your computer
-2. Make sure you have a MIDI output device configured
-3. Place your trained model in the `trained_models/decoder_only_smaller_1024_mega_ds` directory
+1. Create and activate a virtual environment (recommended):
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
+
+2. Install the required dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Connect your MIDI keyboard/controller to your computer
+4. Make sure you have a MIDI output device configured
+5. Place your trained model in the `trained_models/decoder_only_smaller_1024_mega_ds` directory
 
 ## Usage
 
