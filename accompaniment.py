@@ -37,16 +37,6 @@ def _sounding(notes):
     return [{"pitch": n["pitch"], "velocity": n["velocity"]} for n in _by_pitch(notes)]
 
 
-def _described(note):
-    return {
-        "pitch": note["pitch"],
-        "velocity": note["velocity"],
-        "source": note["source"],
-        "released": note["released"],
-        "age": note["age"],
-    }
-
-
 def _events(sounding, new_notes):
     events = [
         {"kind": "note_off", "channel": 1, "pitch": n["pitch"], "velocity": 0}
@@ -74,7 +64,7 @@ def tick(picture, predict):
         return [], sounding, None
     state = {
         "reference": max(n["pitch"] for n in reference_set),
-        "notes": [_described(n) for n in held + released + sounding_notes],
+        "notes": held + released + sounding_notes,
     }
     try:
         gesture, probability = predict(state, GESTURE_QUESTION)
@@ -165,6 +155,8 @@ class LayaPort:
             print(f"Error loading accompaniment: {exc}")
 
     def predict(self, state, question):
+        if self._agent is None:
+            raise RuntimeError("accompaniment model not loaded")
         result = self._agent.predict(state, question)
         answer = result["answers"]["gesture"]
         choice = answer["choice"]

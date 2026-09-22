@@ -1,4 +1,5 @@
 import sys
+import threading
 import time
 
 from CK_rec.rec_classes import CK_rec
@@ -23,6 +24,8 @@ def main():
     midi_rec = CK_rec(my_port, on_id, debug=False)
     collector = Collector()
     sounding = []
+    busy = False
+    gate = threading.Lock()
 
     def on_midi(event, data=None):
         midi_rec(event, data)
@@ -38,29 +41,40 @@ def main():
     code_k.set_callback(on_midi)
     port = LayaPort()
 
+    def run_tick(picture):
+        nonlocal sounding, busy
+        try:
+            events, next_sounding, _state = tick(picture, port.predict)
+        except Exception as exc:
+            print(f"Error in accompaniment: {exc}")
+        else:
+            for event in events:
+                _send(midi_rec, event)
+            if events:
+                attacked_at = time.monotonic()
+                with gate:
+                    sounding = [
+                        {
+                            "pitch": note["pitch"],
+                            "velocity": note["velocity"],
+                            "attacked_at": attacked_at,
+                        }
+                        for note in next_sounding
+                    ]
+        finally:
+            with gate:
+                busy = False
+
     next_grid = time.monotonic()
     try:
         while True:
             now = time.monotonic()
             if now >= next_grid:
-                picture = collector.take(sounding, now)
-                try:
-                    events, next_sounding, _state = tick(picture, port.predict)
-                except Exception as exc:
-                    print(f"Error in accompaniment: {exc}")
-                else:
-                    for event in events:
-                        _send(midi_rec, event)
-                    if events:
-                        attacked_at = time.monotonic()
-                        sounding = [
-                            {
-                                "pitch": note["pitch"],
-                                "velocity": note["velocity"],
-                                "attacked_at": attacked_at,
-                            }
-                            for note in next_sounding
-                        ]
+                with gate:
+                    if not busy:
+                        busy = True
+                        picture = collector.take(sounding, now)
+                        threading.Thread(target=run_tick, args=(picture,), daemon=True).start()
                 now = time.monotonic()
                 while next_grid <= now:
                     next_grid += GRID_S
