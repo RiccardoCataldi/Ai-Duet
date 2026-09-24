@@ -31,11 +31,12 @@ def main():
         midi_rec(event, data)
         message, _deltatime = event
         status = message[0]
-        if status in (254, 176):
+        if status in (254, 176) or len(message) < 3:
             return
-        if status == on_id:
+        kind = status & 0xF0
+        if kind == 0x90 and message[2] > 0:
             collector.note_on(message[1], message[2], time.monotonic())
-        else:
+        elif kind in (0x80, 0x90):
             collector.note_off(message[1])
 
     code_k.set_callback(on_midi)
