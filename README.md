@@ -6,9 +6,8 @@ An interactive AI music generation system that responds to MIDI keyboard input i
 
 - Real-time MIDI input processing
 - AI-powered music generation based on your playing
-- Parallel playback of your performance and AI-generated music
+- A real-time duo: the model improvises on electric piano while you play, and follows your key
 - Different instruments for input and generated music
-- Automatic generation every 5 seconds
 - MIDI file saving and playback capabilities
 
 ## Requirements
@@ -41,24 +40,48 @@ The project requires several Python packages listed in `requirements.txt`. See t
 
 ## Usage
 
-1. Run the program:
+1. Start the model server (`python -m music_transformer.server`, or on a Jetson: see below)
+2. Run the program (`AMT_SERVER` defaults to `localhost:8765`):
 ```bash
 python main.py
 ```
 
-2. Select your MIDI input device when prompted
-3. Start playing on your MIDI keyboard
-4. The system will:
-   - Record your performance on one instrument (default: Piano)
-   - Generate new music on a different instrument (default: Strings)
-   - Play both parts in parallel
+3. Select your MIDI input device when prompted
+4. Start playing on your MIDI keyboard: you play piano, the model plays electric piano at the same time
+5. Press Ctrl+C to stop the program and save the duo to `generated/`
 
-5. Use the following controls while playing:
-   - Press 'i' to change your keyboard's instrument
-   - Press 'g' to change the generated music's instrument
-   - Press 'q' to quit
+## Duo on a Jetson
 
-6. Press Ctrl+C to stop the program and save the generated music
+The model runs on a Jetson Orin Nano (JetPack 6) and the laptop handles MIDI and sound; `run_duet.sh` connects the two.
+
+**On the Jetson, once:**
+- The repo in `~/Ai-Duet` with a venv `.venv` made with `--system-site-packages` (it uses NVIDIA's torch)
+- The model converted to safetensors in `~/models/music-medium-800k` (transformers 5 refuses `.bin` files with torch < 2.6)
+- Power mode MAXN_SUPER (it persists across reboots)
+- `ssh jetson` works from the laptop with a key
+
+**On the laptop, once:** FluidSynth with the `FluidR3_GM` soundfont, and the venv `.venv` of this repo.
+
+**Every time the Jetson boots:**
+```bash
+ssh -t jetson sudo jetson_clocks   # the clocks go back to defaults after every reboot
+./run_duet.sh                      # from this repo, on the laptop
+```
+`run_duet.sh` restarts everything: the server on the Jetson, the SSH tunnel on port 8765, FluidSynth and `main.py` on the KeyStep.
+
+**Logs:** `~/amt_server.log` on the Jetson (`duo: started`, then how many notes it heard and played);
+`duet.log` and `fluidsynth.log` on the laptop in `$LOG_DIR` (default `/tmp`).
+
+**Changing the code on the Jetson:** it does not pull from git; copy the files over, e.g.
+`scp music_transformer/duo.py jetson:~/Ai-Duet/music_transformer/`, then run `./run_duet.sh` again.
+The session tests need torch, so run them there: `python -m unittest tests.test_duo_session`.
+
+**Tuning by ear** (top of `music_transformer/duo.py`):
+- `MIN_STEP`, `SPACE`: time between the model's onsets, when you rest and while you play
+- `OFF_KEY`: how strongly it keeps to the pitch classes you just played (higher = more in your key)
+- `NO_REPEAT`: the length of runs it may not repeat
+- `MEMORY`: how much of its own playing it remembers (shorter = listens to you more)
+- `temperature` and `top_p` in `DuoSession`: how adventurous its choices are
 
 ## Instrument Selection
 
