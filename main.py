@@ -15,7 +15,7 @@ ANSWER_S = 8     # longest answer, in seconds
 WINDOW_S = 30    # how much of the duet the model hears
 LEAD_S = 0.05    # head start given to the first answered note
 INPUT_PROGRAM = 0        # Acoustic Grand Piano
-GENERATED_PROGRAM = 48   # String Ensemble
+GENERATED_PROGRAM = 4    # Electric Piano 1
 
 
 def load_generator():
