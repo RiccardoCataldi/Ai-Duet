@@ -1,90 +1,80 @@
 """
-Serve AMTGenerator over HTTP so the model can run on another machine (e.g. a Jetson).
+Serve the duo over TCP so the model can run on another machine (e.g. a Jetson).
 
     python -m music_transformer.server            # listens on 127.0.0.1:8765
-    ssh -N -L 8765:localhost:8765 jetson          # on the laptop, then AMT_SERVER=http://localhost:8765
+    ssh -N -L 8765:localhost:8765 jetson          # on the laptop, then AMT_SERVER=localhost:8765
 
-POST /respond with the prompt MIDI file as the body; the reply is the generated MIDI file,
-or 204 when there is nothing to respond to.
-
-POST /stream with {"notes": [[onset, duration, pitch], ...], "start": s, "seconds": s} as JSON;
-the reply streams one "onset duration pitch" line per note as soon as it is sampled.
-Closing the connection stops the generation.
+One line per message, times in seconds since the connection opened:
+    client -> server   "on <onset> <duration> <pitch>"   you pressed a key (the duration is a guess)
+    server -> client   "note <onset> <duration> <pitch>" the model's next note
+    server -> client   "cut <onset>"                     forget the model's notes from <onset> on: they are resampled
+One duo at a time; a second connection waits for the first to close.
 """
 
 import argparse
-import json
-import os
-import tempfile
+import queue
+import socketserver
 import threading
-import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from anticipation.config import TIME_RESOLUTION
 
 from music_transformer.amt import AMTGenerator
+from music_transformer.duo import LOOKAHEAD, DuoSession
 
 
 def make_handler(generator):
     lock = threading.Lock()
 
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            if self.path == '/stream':
-                self.stream()
-                return
-            if self.path != '/respond':
-                self.send_error(404)
-                return
-            body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
-            with tempfile.TemporaryDirectory() as tmp:
-                midi_in, midi_out = os.path.join(tmp, 'in.mid'), os.path.join(tmp, 'out.mid')
-                with open(midi_in, 'wb') as f:
-                    f.write(body)
-                start = time.time()
-                try:
-                    with lock:
-                        ok = generator.respond(midi_in, midi_out)
-                except Exception as e:
-                    print(f"Error generating: {e}")
-                    self.send_error(500, str(e))
-                    return
-                print(f"respond: {'ok' if ok else 'empty'} in {time.time() - start:.1f}s")
-                if not ok:
-                    self.send_response(204)
-                    self.end_headers()
-                    return
-                with open(midi_out, 'rb') as f:
-                    data = f.read()
-            self.send_response(200)
-            self.send_header('Content-Type', 'audio/midi')
-            self.send_header('Content-Length', str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
+    class Handler(socketserver.StreamRequestHandler):
+        disable_nagle_algorithm = True  # every note goes out at once
 
-        def stream(self):
-            request = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/plain')
-            self.end_headers()
-            start, count = time.time(), 0
+        def handle(self):
             with lock:
-                answer = generator.stream(request['notes'], request['start'], request.get('seconds', 8))
+                print("duo: started")
+                inbox = queue.Queue()
+                threading.Thread(target=self.read, args=(inbox,), daemon=True).start()
+                session, heard, played = DuoSession(generator.model, generator.device), 0, 0
                 try:
-                    for onset, duration, pitch in answer:
-                        if count == 0:
-                            print(f"stream: first note after {time.time() - start:.2f}s")
-                        self.wfile.write(f"{onset:.2f} {duration:.2f} {pitch}\n".encode())
-                        count += 1
+                    while True:
+                        # your keys come first; otherwise sample on, or wait while far enough ahead
+                        wait = None if session.base is None else max(session.ahead() - LOOKAHEAD, 0) / TIME_RESOLUTION
+                        try:
+                            note = inbox.get(timeout=wait) if wait != 0 else inbox.get_nowait()
+                        except queue.Empty:
+                            note = False
+                        if note is None:
+                            break
+                        if note:
+                            heard += 1
+                            cut = session.hear(*note)
+                            if cut is not None:
+                                self.wfile.write(f"cut {cut:.3f}\n".encode())
+                        elif session.ahead() < LOOKAHEAD:
+                            onset, duration, pitch = session.play()
+                            self.wfile.write(f"note {onset:.3f} {duration:.3f} {pitch}\n".encode())
+                            played += 1
                 except (BrokenPipeError, ConnectionResetError):
-                    print(f"stream: cut short after {count} notes")
-                    return
-                finally:
-                    answer.close()
-            print(f"stream: {count} notes in {time.time() - start:.1f}s")
+                    pass
+                print(f"duo: ended, heard {heard} notes, played {played}")
 
-        def log_message(self, *args):
-            pass
+        def read(self, inbox):
+            try:
+                for line in self.rfile:
+                    kind, *values = line.split()
+                    if kind == b'on':
+                        onset, duration, pitch = values
+                        inbox.put((float(onset), float(duration), int(pitch)))
+            except (ConnectionResetError, ValueError) as e:
+                print(f"duo: bad input ({e})")
+            finally:
+                inbox.put(None)
 
     return Handler
+
+
+class Server(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
 
 
 if __name__ == '__main__':
@@ -95,4 +85,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
     generator = AMTGenerator(model_name=args.model)
     print(f"AMT model loaded on {generator.device}, listening on {args.host}:{args.port}")
-    ThreadingHTTPServer((args.host, args.port), make_handler(generator)).serve_forever()
+    Server((args.host, args.port), make_handler(generator)).serve_forever()
