@@ -15,13 +15,19 @@ from CK_rec.setup import Setup
 from CK_rec.rec_classes import CK_rec
 
 import time
-from music_transformer.amt import AMTGenerator
 
 
 class MusicGeneratorApp:
     def __init__(self, midi_recorder):
         try:
-            self.generator = AMTGenerator()
+            server = os.environ.get('AMT_SERVER')
+            if server:
+                from music_transformer.remote import RemoteAMTGenerator
+                self.generator = RemoteAMTGenerator(server)
+                print(f"Using remote AMT model at {server}")
+            else:
+                from music_transformer.amt import AMTGenerator
+                self.generator = AMTGenerator()
         except Exception as e:
             print(f"Error loading model: {e}")
             self.generator = None
