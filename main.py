@@ -1,100 +1,191 @@
-import mido
-from mido import MidiFile, MidiTrack
-import threading
+import heapq
 import os
-import rtmidi
-
-# import from parrentdir
+import queue
 import sys
-import inspect
+import threading
+import time
 
-currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
-parentdir = os.path.dirname(currentdir)
-sys.path.insert(0, parentdir)
+import mido
+
 from CK_rec.setup import Setup
 from CK_rec.rec_classes import CK_rec
 
-import time
+PAUSE_S = 0.5    # silence after your phrase that hands the turn to the model
+ANSWER_S = 8     # longest answer, in seconds
+WINDOW_S = 30    # how much of the duet the model hears
+LEAD_S = 0.05    # head start given to the first answered note
+INPUT_PROGRAM = 0        # Acoustic Grand Piano
+GENERATED_PROGRAM = 48   # String Ensemble
 
 
-class MusicGeneratorApp:
-    def __init__(self, midi_recorder):
-        try:
-            server = os.environ.get('AMT_SERVER')
-            if server:
-                from music_transformer.remote import RemoteAMTGenerator
-                self.generator = RemoteAMTGenerator(server)
-                print(f"Using remote AMT model at {server}")
-            else:
-                from music_transformer.amt import AMTGenerator
-                self.generator = AMTGenerator()
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            self.generator = None
-        self.generated = None
-        self.midi_recorder = midi_recorder
-        self.midi_file_path = "output.mid"
+def load_generator():
+    server = os.environ.get('AMT_SERVER')
+    if server:
+        from music_transformer.remote import RemoteAMTGenerator
+        print(f"Using remote AMT model at {server}")
+        return RemoteAMTGenerator(server)
+    from music_transformer.amt import AMTGenerator
+    return AMTGenerator()
 
-        self.midi_recorder.set_input_instrument(0)
-        self.midi_recorder.set_generated_instrument(48)
 
-    def generate(self):
-        if self.generator is None:
-            print("Cannot generate music: model not loaded")
-            return
+class Duet:
+    """
+    Call and response: when you pause, the model answers note by note as it samples them;
+    when you play again, it stops and listens.
+    """
 
-        try:
-            temp_midi = f"temp_generated_{int(time.time())}.mid"
-            if not self.generator.respond(self.midi_file_path, temp_midi):
-                print("No valid MIDI data to generate from")
+    def __init__(self, generator, midi_rec):
+        self.generator = generator
+        self.midi_rec = midi_rec
+        self.lock = threading.Lock()
+        self.notes = []          # (onset, offset, pitch, velocity, generated) in time.monotonic() seconds
+        self.held = {}           # pitch -> (onset, velocity)
+        self.velocity = 80
+        self.last_played = None  # last key press/release not yet answered
+        self.answer = None       # threading.Event that stops the answer being played
+
+    def note_on(self, pitch, velocity, now):
+        with self.lock:
+            if self.answer:
+                self.answer.set()
+                self.answer = None
+            self.held[pitch] = (now, velocity)
+            self.velocity = velocity
+            self.last_played = now
+
+    def note_off(self, pitch, now):
+        with self.lock:
+            if pitch not in self.held:
                 return
-            self.generated = temp_midi
-            self.midi_recorder.play_external_midi(temp_midi)
-        except Exception as e:
-            print(f"Error generating music: {e}")
+            onset, velocity = self.held.pop(pitch)
+            self.notes.append((onset, now, pitch, velocity, False))
+            self.last_played = now
 
-    def save_to_file(self):
-        if self.generated is not None:
-            os.makedirs("generated", exist_ok=True)
-            os.replace(self.generated, f"./generated/{int(time.time())}.mid")
+    def poll(self, now):
+        with self.lock:
+            if self.held or self.answer or self.last_played is None or now - self.last_played < PAUSE_S:
+                return
+            self.last_played = None
+            heard = [n for n in self.notes if n[0] >= now - WINDOW_S]
+            if not heard:
+                return
+            origin = min(n[0] for n in heard)
+            prompt = [(onset - origin, offset - onset, pitch) for onset, offset, pitch, _, _ in heard]
+            self.answer = threading.Event()
+            # the model answers best right where your phrase ends; the pause is only how we notice it
+            end = max(n[1] for n in heard)
+            args = (self.answer, prompt, origin, end - origin, self.velocity)
+        threading.Thread(target=self._play, args=args, daemon=True).start()
+
+    def _play(self, stop, prompt, origin, start, velocity):
+        incoming = queue.Queue()
+
+        def read():
+            try:
+                for note in self.generator.stream(prompt, start, ANSWER_S):
+                    if stop.is_set():
+                        break
+                    incoming.put(note)
+            except Exception as e:
+                print(f"Error generating music: {e}")
+            finally:
+                incoming.put(None)
+
+        threading.Thread(target=read, daemon=True).start()
+        pending, sounding, shift, done = [], {}, None, False
+        while not stop.is_set() and not (done and not pending):
+            wait = 0.01 if not pending else min(max(pending[0][0] - time.monotonic(), 0), 0.01)
+            try:
+                note = incoming.get(timeout=wait)
+            except queue.Empty:
+                note = False
+            if note is None:
+                done = True
+            elif note:
+                onset, duration, pitch = note
+                at = origin + onset
+                if shift is None:
+                    # the first note is due when your phrase ended: play it now and keep the rest in step
+                    shift = max(time.monotonic() + LEAD_S - at, 0)
+                at += shift
+                heapq.heappush(pending, (at, 1, pitch))
+                heapq.heappush(pending, (at + duration, 0, pitch))
+            now = time.monotonic()
+            while pending and pending[0][0] <= now:
+                _, on, pitch = heapq.heappop(pending)
+                if pitch in sounding:
+                    self._release(pitch, sounding.pop(pitch), now, velocity)
+                if on:
+                    self.midi_rec.play_midi_message([0x90, pitch, velocity], is_generated=True)
+                    sounding[pitch] = now
+        now = time.monotonic()
+        for pitch, onset in sounding.items():
+            self._release(pitch, onset, now, velocity)
+        with self.lock:
+            if self.answer is stop:
+                self.answer = None
+
+    def _release(self, pitch, onset, now, velocity):
+        self.midi_rec.play_midi_message([0x80, pitch, 0], is_generated=True)
+        with self.lock:
+            self.notes.append((onset, now, pitch, velocity, True))
+
+    def save(self, path):
+        if not self.notes:
+            return
+        mid = mido.MidiFile()
+        ticks = lambda seconds: int(mido.second2tick(seconds, mid.ticks_per_beat, mido.bpm2tempo(120)))
+        origin = min(n[0] for n in self.notes)
+        for generated, channel, program in ((False, 0, INPUT_PROGRAM), (True, 1, GENERATED_PROGRAM)):
+            messages = []
+            for onset, offset, pitch, velocity, is_generated in self.notes:
+                if is_generated == generated:
+                    messages.append((onset - origin, 'note_on', pitch, velocity))
+                    messages.append((offset - origin, 'note_off', pitch, 0))
+            track = mido.MidiTrack([mido.Message('program_change', channel=channel, program=program)])
+            last = 0
+            for at, kind, pitch, velocity in sorted(messages):
+                track.append(mido.Message(kind, channel=channel, note=pitch, velocity=velocity, time=ticks(at) - last))
+                last = ticks(at)
+            mid.tracks.append(track)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        mid.save(path)
+        print(f"Duet saved as {path}")
 
 
 if __name__ == "__main__":
-    # Start the Device
     codeK = Setup()
     myPort = codeK.perform_setup()
     codeK.open_port(myPort)
-    on_id = 151
-    print("your note on id is: ", on_id)
 
-    # Initialize MIDI recorder
-    midiRec = CK_rec(myPort, on_id, debug=False)
-    codeK.set_callback(midiRec)
+    midiRec = CK_rec(myPort, 0x90, debug=False)
+    midiRec.set_input_instrument(INPUT_PROGRAM)
+    midiRec.set_generated_instrument(GENERATED_PROGRAM)
+    duet = Duet(load_generator(), midiRec)
 
-    # Initialize app with MIDI recorder
-    app = MusicGeneratorApp(midiRec)
+    def on_midi(event, data=None):
+        message, _ = event
+        if len(message) < 3:
+            return
+        kind, pitch, velocity = message[0] & 0xF0, message[1], message[2]
+        if kind == 0x90 and velocity > 0:
+            midiRec.play_midi_message(message)
+            duet.note_on(pitch, velocity, time.monotonic())
+        elif kind in (0x80, 0x90):
+            midiRec.play_midi_message(message)
+            duet.note_off(pitch, time.monotonic())
 
-    def generate_and_play():
-        while True:
-            try:
-                midiRec.saveTrack("output")
-                app.generate()
-                midiRec.clearTrack()
-                time.sleep(5)  # Wait 5 seconds before next generation
-            except Exception as e:
-                print(f"Error in generation thread: {e}")
-
-    # Start generation thread
-    generation_thread = threading.Thread(target=generate_and_play, daemon=True)
-    generation_thread.start()
+    codeK.set_callback(on_midi)
+    print("Play a phrase and pause: the model answers. Ctrl+C to stop.")
 
     try:
         while True:
-            time.sleep(0.1)
+            duet.poll(time.monotonic())
+            time.sleep(0.01)
     except KeyboardInterrupt:
         pass
     finally:
         codeK.end()
-        app.save_to_file()
+        duet.save(f"generated/{int(time.time())}.mid")
         print("Recording Stopped")
         sys.exit(0)

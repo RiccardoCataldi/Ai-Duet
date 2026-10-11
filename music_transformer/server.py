@@ -6,9 +6,14 @@ Serve AMTGenerator over HTTP so the model can run on another machine (e.g. a Jet
 
 POST /respond with the prompt MIDI file as the body; the reply is the generated MIDI file,
 or 204 when there is nothing to respond to.
+
+POST /stream with {"notes": [[onset, duration, pitch], ...], "start": s, "seconds": s} as JSON;
+the reply streams one "onset duration pitch" line per note as soon as it is sampled.
+Closing the connection stops the generation.
 """
 
 import argparse
+import json
 import os
 import tempfile
 import threading
@@ -23,6 +28,9 @@ def make_handler(generator):
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            if self.path == '/stream':
+                self.stream()
+                return
             if self.path != '/respond':
                 self.send_error(404)
                 return
@@ -51,6 +59,27 @@ def make_handler(generator):
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+
+        def stream(self):
+            request = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.end_headers()
+            start, count = time.time(), 0
+            with lock:
+                answer = generator.stream(request['notes'], request['start'], request.get('seconds', 8))
+                try:
+                    for onset, duration, pitch in answer:
+                        if count == 0:
+                            print(f"stream: first note after {time.time() - start:.2f}s")
+                        self.wfile.write(f"{onset:.2f} {duration:.2f} {pitch}\n".encode())
+                        count += 1
+                except (BrokenPipeError, ConnectionResetError):
+                    print(f"stream: cut short after {count} notes")
+                    return
+                finally:
+                    answer.close()
+            print(f"stream: {count} notes in {time.time() - start:.1f}s")
 
         def log_message(self, *args):
             pass
