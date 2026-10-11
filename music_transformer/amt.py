@@ -18,7 +18,8 @@ class AMTGenerator:
                                  else 'mps' if torch.backends.mps.is_available() else 'cpu')
         model_name = model_name or ('stanford-crfm/music-medium-800k' if self.device != 'cpu'
                                     else 'stanford-crfm/music-small-800k')
-        self.model = AutoModelForCausalLM.from_pretrained(model_name).to(self.device).eval()
+        dtype = torch.float16 if self.device == 'cuda' else torch.float32
+        self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype).to(self.device).eval()
 
     @torch.no_grad()
     def respond(self, midi_in, midi_out, seconds=8, top_p=0.95, temperature=0.9, instrument=0, max_prompt_events=150):
