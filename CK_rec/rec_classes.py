@@ -92,7 +92,8 @@ class CK_rec(object):
         try:
             mid = MidiFile(midi_file)
             for msg in mid.play():
-                self.play_midi_message(msg.bytes(), is_generated=True)
+                if msg.type in ('note_on', 'note_off'):
+                    self.play_midi_message(msg.bytes(), is_generated=True)
         except Exception as e:
             print(f"Error playing external MIDI: {e}")
 

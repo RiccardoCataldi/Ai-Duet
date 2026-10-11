@@ -37,7 +37,7 @@ The project requires several Python packages listed in `requirements.txt`. See t
 
 3. Connect your MIDI keyboard/controller to your computer
 4. Make sure you have a MIDI output device configured
-5. Place your trained model in the `trained_models/decoder_only_smaller_1024_mega_ds` directory
+5. The AI uses the pretrained [Anticipatory Music Transformer](https://github.com/jthickstun/anticipation) (trained on the Lakh MIDI dataset). It is downloaded from Hugging Face on first run: `music-medium-800k` on GPU/Apple Silicon, `music-small-800k` on CPU
 
 ## Usage
 

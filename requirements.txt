@@ -8,3 +8,6 @@ PyQt5_sip==12.13.0
 python-rtmidi==1.5.0
 tensorflow==2.7.4
 wandb==0.12.21
+torch>=2.0.1
+transformers>=4.29.2
+anticipation @ git+https://github.com/jthickstun/anticipation.git

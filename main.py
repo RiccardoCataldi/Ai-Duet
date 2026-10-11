@@ -1,6 +1,5 @@
 import mido
 from mido import MidiFile, MidiTrack
-from music21 import *
 import threading
 import os
 import rtmidi
@@ -15,35 +14,18 @@ sys.path.insert(0, parentdir)
 from CK_rec.setup import Setup
 from CK_rec.rec_classes import CK_rec
 
-from pyo import *
-
 import time
-import music21.midi.realtime
-import numpy as np
-import tensorflow as tf
-from music_transformer.convert import midi2idxenc, idxenc2stream
-from music_transformer.transformer import MusicGenerator
-from music_transformer.vocab import MusicVocab
+from music_transformer.amt import AMTGenerator
 
 
 class MusicGeneratorApp:
     def __init__(self, midi_recorder):
         try:
-            model = tf.saved_model.load(
-                "trained_models/decoder_only_smaller_1024_mega_ds"
-            )
-            self.generator = MusicGenerator(model)
+            self.generator = AMTGenerator()
         except Exception as e:
             print(f"Error loading model: {e}")
-            print(
-                "Please make sure the model file exists in the trained_models directory"
-            )
             self.generator = None
-        self.vocab = MusicVocab.create()
         self.generated = None
-        self.sequence = None
-        self.player = None
-        self.is_playing = False
         self.midi_recorder = midi_recorder
         self.midi_file_path = "output.mid"
 
@@ -56,48 +38,19 @@ class MusicGeneratorApp:
             return
 
         try:
-            # Load MIDI file and convert to sequence
-            inp = midi2idxenc(self.midi_file_path, self.vocab, add_eos=False)
-            if len(inp) == 0:
+            temp_midi = f"temp_generated_{int(time.time())}.mid"
+            if not self.generator.respond(self.midi_file_path, temp_midi):
                 print("No valid MIDI data to generate from")
                 return
-        except Exception as e:
-            print(f"Error converting MIDI: {e}")
-            return
-
-        try:
-            generated = self.generator.extend_sequence(
-                inp,
-                max_generate_len=64,
-                search="greedy",
-                top_k_notes=128,
-                top_k_durations=128,
-                top_k_offset=0,
-                beam_width=3,
-                creativity=100,
-            )
-            self.sequence = generated.numpy()
-            self.generated = idxenc2stream(self.sequence, vocab=self.vocab)
-
-            # Save the generated music to a temporary MIDI file
-            temp_midi = f"temp_generated_{int(time.time())}.mid"
-            self.generated.write("midi", fp=temp_midi)
-
-            # Play the generated music through MIDI output
+            self.generated = temp_midi
             self.midi_recorder.play_external_midi(temp_midi)
-            self.is_playing = True
-
         except Exception as e:
             print(f"Error generating music: {e}")
 
     def save_to_file(self):
         if self.generated is not None:
-            try:
-                if not os.path.isdir("./generated"):
-                    os.mkdir("generated")
-                self.generated.write("midi", fp=f"./generated/{int(time.time())}.mid")
-            except Exception as e:
-                print(e)
+            os.makedirs("generated", exist_ok=True)
+            os.replace(self.generated, f"./generated/{int(time.time())}.mid")
 
 
 if __name__ == "__main__":
