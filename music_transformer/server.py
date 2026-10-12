@@ -33,7 +33,7 @@ def make_handler(generator):
                 print("duo: started")
                 inbox = queue.Queue()
                 threading.Thread(target=self.read, args=(inbox,), daemon=True).start()
-                session, heard, played = DuoSession(generator.model, generator.device), 0, 0
+                session, heard, played, shown = DuoSession(generator.model, generator.device), 0, 0, None
                 try:
                     while True:
                         # your keys come first; otherwise sample on, or wait while far enough ahead
@@ -47,6 +47,10 @@ def make_handler(generator):
                         if note:
                             heard += 1
                             cut = session.hear(*note)
+                            key, sure = session.listener.key()
+                            if key != shown and sure > 0.3:
+                                shown = key
+                                print(f"duo: {note[0]:.1f}s you are in {session.listener.name(key)} ({sure:.0%})")
                             if cut is not None:
                                 self.wfile.write(f"cut {cut:.3f}\n".encode())
                         elif session.ahead() < LOOKAHEAD:

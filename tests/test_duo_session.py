@@ -139,7 +139,29 @@ class DuoSessionTest(unittest.TestCase):
             self.clock.t = notes[-1][0]
             self.session.hear(self.clock.t, 0.2, (60, 64, 67)[len(notes) % 3])
         in_key = sum(pitch % 12 in (0, 4, 7) for _, _, pitch in notes) / len(notes)
-        self.assertGreater(in_key, 0.35)   # 3 pitch classes of 12: 25% without ears, about 47% with OFF_KEY 1.0
+        self.assertGreater(in_key, 0.35)   # 3 pitch classes of 12: 25% without ears
+
+    def play_scale(self, pitches, start):
+        for i, pitch in enumerate(pitches):
+            self.clock.t = start + i * 0.3
+            self.session.hear(self.clock.t, 0.2, pitch)
+        self.clock.t += 1.5   # you rest: the model answers and leads
+
+    def test_after_you_modulate_it_plays_in_the_new_key(self):
+        c_major = [60, 62, 64, 65, 67, 69, 71, 72, 67, 64, 60, 62, 65, 69, 71, 67]
+        self.play_scale(c_major, 0.1)
+        self.play_scale([p + 3 for p in c_major], self.clock.t)
+        pitches = [pitch % 12 for _ in range(4) for _, _, pitch in self.fill()] + \
+                  [self.session.play()[2] % 12 for _ in range(60)]
+        self.assertGreater(sum(p in (3, 5, 7, 8, 10, 0, 2) for p in pitches) / len(pitches), 0.75)   # 58% by chance
+        self.assertLess(sum(p in (4, 11) for p in pitches) / len(pitches), 0.1)   # only in C: A stays possible, as in Bb
+
+    def test_its_onsets_fall_on_your_pulse(self):
+        self.play_scale([60, 62, 64, 65, 67, 69, 71, 72], 0.1)
+        onsets = [self.session.play()[0] for _ in range(30)]
+        for onset in onsets:
+            off = (onset - 0.1) % 0.3
+            self.assertLessEqual(min(off, 0.3 - off), duo.GRID / 100 + 1e-9)
 
 if __name__ == '__main__':
     unittest.main()

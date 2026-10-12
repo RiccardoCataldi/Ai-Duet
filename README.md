@@ -6,7 +6,7 @@ An interactive AI music generation system that responds to MIDI keyboard input i
 
 - Real-time MIDI input processing
 - AI-powered music generation based on your playing
-- A real-time duo: the model improvises on electric piano while you play, and follows your key
+- A real-time duo: the model improvises on electric piano while you play. It listens like a partner: it follows your key and your modulations, leans on the chord you play, keeps to your pulse, stays under you while you play and answers your phrases when you rest
 - Different instruments for input and generated music
 - MIDI file saving and playback capabilities
 
@@ -69,7 +69,7 @@ ssh -t jetson sudo jetson_clocks   # the clocks go back to defaults after every 
 ```
 `run_duet.sh` restarts everything: the server on the Jetson, the SSH tunnel on port 8765, FluidSynth and `main.py` on the KeyStep.
 
-**Logs:** `~/amt_server.log` on the Jetson (`duo: started`, then how many notes it heard and played);
+**Logs:** `~/amt_server.log` on the Jetson (`duo: started`, the key it hears you in each time it changes, then how many notes it heard and played);
 `duet.log` and `fluidsynth.log` on the laptop in `$LOG_DIR` (default `/tmp`).
 
 **Changing the code on the Jetson:** it does not pull from git; copy the files over, e.g.
@@ -78,7 +78,11 @@ The session tests need torch, so run them there: `python -m unittest tests.test_
 
 **Tuning by ear** (top of `music_transformer/duo.py`):
 - `MIN_STEP`, `SPACE`: time between the model's onsets, when you rest and while you play
-- `OFF_KEY`: how strongly it keeps to the pitch classes you just played (higher = more in your key)
+- `OUT_OF_KEY`, `CHORD_TONE`: how strongly it keeps to your key and leans on the chord you are playing
+- `UNDER`: how firmly it stays below you while you play
+- `ANSWER`, `ECHO`: how long after your phrase it answers it, and how closely it follows your intervals
+- `GRID`: how tightly its onsets sit on your pulse
+- `STAY` (top of `music_transformer/listener.py`): how soon it believes you modulated (lower = sooner, more flicker)
 - `NO_REPEAT`: the length of runs it may not repeat
 - `MEMORY`: how much of its own playing it remembers (shorter = listens to you more)
 - `temperature` and `top_p` in `DuoSession`: how adventurous its choices are
