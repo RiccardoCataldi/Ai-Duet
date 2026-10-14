@@ -1,3 +1,7 @@
+
+
+https://github.com/user-attachments/assets/d64728c6-4b59-4d35-81a4-7908be2604a1
+
 # AI Music Generator
 
 An interactive AI music generation system that responds to MIDI keyboard input in real-time. The system uses a transformer-based model to generate music based on your playing, creating a collaborative experience between human and AI.
@@ -14,7 +18,7 @@ An interactive AI music generation system that responds to MIDI keyboard input i
 
 A one-minute improvisation, played live on the Jetson duo: a human on piano (amber), the model on a warm electric piano (teal). The model heard it in C major.
 
-[![The duo as a piano roll: click to watch the video with sound](samples/duo/duo-c-major.gif)](samples/duo/duo-c-major.mp4)
+[![The duo as a piano roll: click to watch the video with sound](samples/duo/duo-c-major.mp4)]
 
 - [duo-c-major.mp4](samples/duo/duo-c-major.mp4): the video with sound (the preview above is a silent ten-second excerpt)
 - [duo-c-major.ogg](samples/duo/duo-c-major.ogg): the audio alone (open *View raw* to play it in the browser)
