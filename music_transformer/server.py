@@ -13,10 +13,12 @@ One duo at a time; a second connection waits for the first to close.
 A connection that starts with "knobs" turns the duo's knobs (duo.KNOBS) instead, while a duo plays or before:
     server -> client   "knob <name> <value> <lowest> <highest> <default> <unit> <what it does>"   one per knob, then "ready"
     client -> server   "set <name> <value>"              from the model's next note on, and for the next duos
+    server -> client   "state <json>"                    four times a second: DuoSession.state(), what it hears and does
 """
 
 import argparse
 import itertools
+import json
 import queue
 import socketserver
 import threading
@@ -25,7 +27,9 @@ import time
 from anticipation.config import TIME_RESOLUTION
 
 from music_transformer.amt import AMTGenerator
-from music_transformer.duo import KNOBS, LOOKAHEAD, DuoSession, knob
+from music_transformer.duo import ALWAYS, KNOBS, LOOKAHEAD, DuoSession, knob
+
+STATE_S = 0.25    # how often a knobs connection hears what the duo is doing
 
 
 def make_handler(generator):
@@ -48,6 +52,7 @@ def make_handler(generator):
             for name, (_, low, high, unit, what) in KNOBS.items():
                 self.wfile.write(f"knob {name} {knobs[name]} {low} {high} {KNOBS[name][0]} {unit or '-'} {what}\n".encode())
             self.wfile.write(b"ready\n")
+            threading.Thread(target=self.report, daemon=True).start()
             try:
                 for line in self.rfile:
                     kind, *values = line.decode().split()
@@ -59,6 +64,20 @@ def make_handler(generator):
                         print(f"duo: {name} = {knobs[name]}")
             except (ConnectionResetError, ValueError) as e:
                 print(f"duo: bad knob ({e})")
+
+        def report(self):
+            idle = {'mode': 'listening', 'key': None, 'chord': None, 'bpm': None, 'active': sorted(ALWAYS)}
+            while True:
+                try:
+                    state = playing[0].state() if playing else idle
+                except Exception:          # the duo moved on while we read it; the next report will do
+                    state = None
+                try:
+                    if state:
+                        self.wfile.write(f"state {json.dumps(state)}\n".encode())
+                except (OSError, ValueError):   # the knobs connection closed
+                    return
+                time.sleep(STATE_S)
 
         def duo(self, first, opened):
             with lock:

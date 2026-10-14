@@ -1,9 +1,15 @@
 """
-Knobs on screen next to the piano roll, in three tabs: the model's mind (its knobs on the Jetson, see
-music_transformer/server.py, "knobs"), your sound and the model's (sound.py, in FluidSynth on this laptop).
-Drag a knob up or down (Shift: finely) or turn the wheel over it; a double click puts it back.
+Knobs on screen next to the piano roll, in four tabs:
+- AI mind: a few musical controls (density, harmony, role...), each turning some of the model's knobs on the Jetson
+  (see music_transformer/server.py, "knobs"), and the octaves it may play
+- Your sound, AI sound: yours and the model's in FluidSynth on this laptop (sound.py)
+- Advanced: every knob of the model on its own
+A knob is dimmed while what it shapes is not happening (the server says what the model is doing). Drag a knob up or
+down (Shift: finely) or turn the wheel over it; a double click puts it back.
 """
+import json
 import math
+import os
 import socket
 import threading
 import time
@@ -13,12 +19,36 @@ import pygame.gfxdraw
 
 import sound
 
-PANEL_W = 330
+PANEL_W = 360
 COLUMNS = 3
 DRAG = 220                # pixels of drag across a knob's whole range
 STEPS = 50                # wheel steps across it
 DOUBLE_CLICK_S = 0.35
 SWEEP = 270               # degrees a knob turns, its gap at the bottom
+MIND_FILE = os.path.expanduser('~/.config/ai-duet/mind.json')   # the model's knobs as last turned
+
+# the musical controls: label, its two ends, what it does, and the model's knobs it turns, each at (0, middle, 1);
+# the middle is the duo's default
+MACROS = [
+    ('density', ('sparse', 'dense'), "how many notes it plays",
+     {'min_step': (60, 20, 8), 'space': (150, 50, 15)}),
+    ('harmony', ('inside', 'outside'), "how far it strays from your key and the chord you play",
+     {'out_of_key': (5.0, 2.0, 0.0), 'chord_tone': (3.0, 1.0, 0.0)}),
+    ('role', ('accompanies', 'leads'), "while you play: it stays below you, or goes anywhere",
+     {'under': (3.0, 1.0, 0.0)}),
+    ('dialogue', ('ignores you', 'answers you'), "when your phrase ends: how soon and how closely it answers it",
+     {'answer': (0, 400, 1000), 'echo': (0.0, 3.0, 6.0)}),
+    ('groove', ('loose', 'tight'), "how closely its notes sit on your pulse",
+     {'grid': (20, 2, 0)}),
+    ('risk', ('safe', 'adventurous'), "how surprising its choices are",
+     {'temperature': (0.7, 1.0, 1.4), 'top_p': (0.85, 0.98, 1.0)}),
+    ('focus', ('on you', 'on itself'), "whose playing it builds on: yours, or its own line too",
+     {'memory': (50, 200, 2000)}),
+    ('key follow', ('steady', 'quick'), "how soon it follows you into a new key",
+     {'stay': (0.995, 0.97, 0.85)}),
+]
+MODES = {'listening': 'waiting for you to play', 'accompanying': 'accompanying you', 'answering': 'answering you',
+         'alone': 'playing on its own'}
 
 PANEL = (17, 20, 31)
 EDGE = (44, 49, 68)
@@ -28,19 +58,20 @@ YOU = (255, 176, 84)      # the colours of the piano roll
 AI = (94, 214, 230)
 TEXT = (210, 214, 226)
 DIM = (120, 126, 146)
+FAINT = (70, 76, 96)
 
 
 class Knob:
-    """`turned(knob)` is called whenever what it shows changes."""
+    """`turned(knob)` is called whenever what it shows changes (a musical control: whenever it moves)."""
 
-    def __init__(self, name, value, low, high, default, unit, what, whole, turned):
-        self.name, self.unit, self.what, self.whole, self.turned = name, unit, what, whole, turned
+    def __init__(self, name, value, low, high, default, unit, what, whole, turned, ends=None):
+        self.name, self.unit, self.what, self.whole, self.turned, self.ends = name, unit, what, whole, turned, ends
         self.value, self.low, self.high, self.default = float(value), float(low), float(high), float(default)
 
     def set(self, value):
         before = self.shown()
         self.value = min(max(value, self.low), self.high)
-        if self.shown() != before:
+        if self.shown() != before or self.unit == 'macro':
             self.turned(self)
 
     def step(self):
@@ -52,6 +83,8 @@ class Knob:
 
     def shown(self):
         value = round(self.value) if self.whole else self.value
+        if self.unit == 'macro':
+            return self.ends[0] if value < 0.4 else self.ends[1] if value > 0.6 else 'balanced'
         if self.unit == 'ticks':
             return f"{value / 100:.2f} s"
         if self.unit == 'notes':
@@ -77,45 +110,105 @@ class Knob:
         return (self.value - self.low) / (self.high - self.low)
 
 
-class Server:
-    """The knobs connection to the AMT server; it connects again whenever it is lost."""
+def along(anchors, share):
+    """The value at `share` (0 to 1) of a line through anchors at 0, 0.5 and 1."""
+    a, b, c = anchors
+    return a + (b - a) * share * 2 if share <= 0.5 else b + (c - b) * (share - 0.5) * 2
 
-    def __init__(self, address):
-        self.address = address
-        self.knobs = []
+
+class Mind:
+    """The model's knobs over the knobs connection to the AMT server, and what it says it is doing.
+    They are kept in MIND_FILE and given back to the server each time it connects; it reconnects whenever lost
+    (with no `address`, it does not connect: its knobs are given to it)."""
+
+    def __init__(self, address, path=MIND_FILE):
+        self.address, self.path = address, path
+        self.knobs = {}           # name -> Knob, once connected
+        self.state = None         # the last DuoSession.state() heard
         self.sock = None
         self.lock = threading.Lock()
-        threading.Thread(target=self._connect, daemon=True).start()
+        try:
+            with open(path) as f:
+                self.saved = json.load(f)
+        except (OSError, ValueError):
+            self.saved = {}
+        self.saved.setdefault('knobs', {})
+        self.saved.setdefault('macros', {})
+        self.macros = [Knob(label, self.saved['macros'].get(label, 0.5), 0, 1, 0.5, 'macro', what, False,
+                            self._macro, ends) for label, ends, what, _ in MACROS]
+        self.turns = {label: turns for label, _, _, turns in MACROS}
+        if address:
+            threading.Thread(target=self._connect, daemon=True).start()
 
     def _connect(self):
         host, port = self.address.rsplit(':', 1)
         while True:
-            if self.sock is None:
-                try:
-                    sock = socket.create_connection((host, int(port)), timeout=3)
-                    sock.sendall(b"knobs\n")
-                    knobs = []
-                    for line in sock.makefile('r'):
-                        if line.strip() == 'ready':
-                            break
-                        _, name, value, low, high, default, unit, what = line.split(maxsplit=7)
-                        knobs.append(Knob(name, value, low, high, default, unit.strip('-'), what.strip(),
-                                          '.' not in default, self.send))
-                    sock.settimeout(None)
-                    with self.lock:
-                        self.knobs, self.sock = knobs, sock
-                except (OSError, ValueError):
-                    pass
+            try:
+                sock = socket.create_connection((host, int(port)), timeout=3)
+                sock.sendall(b"knobs\n")
+                lines = sock.makefile('r')
+                knobs = {}
+                for line in lines:
+                    if line.strip() == 'ready':
+                        break
+                    _, name, value, low, high, default, unit, what = line.split(maxsplit=7)
+                    knobs[name] = Knob(name, value, low, high, default, unit.strip('-'), what.strip(),
+                                       '.' not in default, self.send)
+                sock.settimeout(None)
+                with self.lock:
+                    self.knobs, self.sock = knobs, sock
+                for name, value in self.saved['knobs'].items():   # as you left them
+                    if name in knobs:
+                        knobs[name].value = value
+                        self.send(knobs[name])
+                for line in lines:
+                    if line.startswith('state '):
+                        self.state = json.loads(line[6:])
+            except (OSError, ValueError):
+                pass
+            with self.lock:
+                self.knobs, self.sock, self.state = {}, None, None
             time.sleep(2)
 
     def send(self, knob):
         with self.lock:
-            if self.sock is None:
-                return
-            try:
-                self.sock.sendall(f"set {knob.name} {knob.value:.4f}\n".encode())
-            except OSError:
-                self.sock, self.knobs = None, []
+            sock = self.sock
+        if sock is None:
+            return
+        try:
+            sock.sendall(f"set {knob.name} {knob.value:.4f}\n".encode())
+        except OSError:
+            return
+        self.saved['knobs'][knob.name] = knob.value
+        self._save()
+
+    def _macro(self, macro):
+        for name, anchors in self.turns[macro.name].items():
+            if name in self.knobs:
+                self.knobs[name].set(along(anchors, macro.value))
+        self.saved['macros'][macro.name] = macro.value
+        self._save()
+
+    def _save(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        with open(self.path, 'w') as f:
+            json.dump(self.saved, f, indent=1)
+
+    def active(self, knob):
+        """Whether `knob` shapes the model's notes now."""
+        if self.state is None:
+            return True
+        names = self.turns[knob.name] if knob.unit == 'macro' else {knob.name}
+        return bool(set(names) & set(self.state['active']))
+
+    def status(self):
+        """What it hears and does, e.g. 'C major · G7 · 92 bpm · accompanying you'."""
+        if self.state is None:
+            return None
+        heard = [self.state[k] for k in ('key', 'chord') if self.state[k]]
+        if self.state['bpm']:
+            heard.append(f"{self.state['bpm']} bpm")
+        return ' · '.join(heard + [MODES[self.state['mode']]])
 
 
 def sound_knobs(engine, player):
@@ -129,17 +222,20 @@ def sound_knobs(engine, player):
 
 
 class Panel:
-    def __init__(self, address, engine):
-        self.server = Server(address)
-        self.tabs = [('AI mind', AI, lambda: self.server.knobs,
-                      lambda: 'turn them while you play' if self.server.knobs
-                      else f"waiting for the model at {address}"),
-                     ('Your sound', YOU, lambda knobs=sound_knobs(engine, sound.YOU): knobs,
-                      lambda: 'in FluidSynth, on this laptop'),
-                     ('AI sound', AI, lambda knobs=sound_knobs(engine, sound.AI): knobs,
-                      lambda: 'in FluidSynth, on this laptop')]
+    def __init__(self, address, engine, mind_file=MIND_FILE):
+        self.mind = Mind(address, mind_file)
+        waiting = f"waiting for the model at {address}"
+        lit = lambda: 'lit knobs shape what it plays now' if self.mind.knobs else waiting
+        register = lambda: [self.mind.knobs[n] for n in ('lowest', 'highest') if n in self.mind.knobs]
+        yours, its = sound_knobs(engine, sound.YOU), sound_knobs(engine, sound.AI)
+        # title, colour, knobs, status line, whether its knobs wait for their moment
+        self.tabs = [('AI mind', AI, lambda: (self.mind.macros if self.mind.knobs else []) + register(), lit, True),
+                     ('Your sound', YOU, lambda: yours, lambda: 'in FluidSynth, on this laptop', False),
+                     ('AI sound', AI, lambda: its, lambda: 'in FluidSynth, on this laptop', False),
+                     ('Advanced', AI, lambda: list(self.mind.knobs.values()), lit, True)]
         self.tab = 0
         self.font = pygame.font.Font(None, 24)
+        self.tab_font = pygame.font.Font(None, 22)
         self.small = pygame.font.Font(None, 19)
         self.held = None          # (knob, y where the drag started, value then)
         self.hover = None
@@ -197,7 +293,7 @@ class Panel:
         width, height = surface.get_size()
         surface.fill(PANEL)
         pygame.draw.line(surface, EDGE, (0, 0), (0, height))
-        _, accent, _, status = self.tabs[self.tab]
+        _, accent, _, status, waits = self.tabs[self.tab]
         self._tabs(surface)
         surface.blit(self.small.render(status(), True, DIM), (24, 58))
         cell_w = (width - 24) / COLUMNS
@@ -209,23 +305,30 @@ class Panel:
             centre = (round(12 + cell_w * (col + 0.5)), round(116 + row * cell_h))
             self.places[knob.name] = (centre, radius)
             lit = knob is self.hover or (self.held and self.held[0] is knob)
-            self._knob(surface, knob, centre, radius, lit, accent, cell_w - 6)
+            active = not waits or self.mind.active(knob)
+            self._knob(surface, knob, centre, radius, lit, accent if active else FAINT, cell_w - 6, active)
         shown = (self.held[0] if self.held else None) or self.hover
         if shown:
-            self._caption(surface, shown.what, height - 62, width - 48)
+            self._caption(surface, self._explain(shown), height - 84, width - 48)
+
+    def _explain(self, knob):
+        if knob.unit != 'macro':
+            return knob.what
+        turns = ', '.join(name.replace('_', ' ') for name in self.mind.turns[knob.name])
+        return f"{knob.ends[0]} to {knob.ends[1]}: {knob.what} ({turns})"
 
     def _tabs(self, surface):
         x, self.tab_places = 24, []
-        for i, (title, accent, _, _) in enumerate(self.tabs):
-            label = self.font.render(title, True, TEXT if i == self.tab else DIM)
+        for i, (title, accent, *_) in enumerate(self.tabs):
+            label = self.tab_font.render(title, True, TEXT if i == self.tab else DIM)
             rect = pygame.Rect(x - 6, 18, label.get_width() + 12, 30)
             self.tab_places.append(rect)
-            surface.blit(label, (x, 25))
+            surface.blit(label, (x, 26))
             if i == self.tab:
-                pygame.draw.line(surface, accent, (x, 47), (x + label.get_width(), 47), 2)
-            x += label.get_width() + 22
+                pygame.draw.line(surface, accent, (x, 46), (x + label.get_width(), 46), 2)
+            x += label.get_width() + 16
 
-    def _knob(self, surface, knob, centre, radius, lit, accent, room):
+    def _knob(self, surface, knob, centre, radius, lit, accent, room, active):
         start = 90 + SWEEP / 2                       # degrees, counter-clockwise from 3 o'clock
         arc(surface, centre, radius + 7, 4, start, start - SWEEP, TRACK)
         if knob.share() > 0.002:
@@ -235,14 +338,14 @@ class Panel:
         pygame.gfxdraw.aacircle(surface, x, y, radius, accent if lit else EDGE)
         angle = math.radians(start - SWEEP * knob.share())
         tip = (x + math.cos(angle) * (radius - 6), y - math.sin(angle) * (radius - 6))
-        pygame.draw.line(surface, TEXT, (x + math.cos(angle) * 6, y - math.sin(angle) * 6), tip, 3)
+        pygame.draw.line(surface, TEXT if active else DIM, (x + math.cos(angle) * 6, y - math.sin(angle) * 6), tip, 3)
         moved = abs(knob.value - knob.default) > (knob.high - knob.low) / 200
-        label = self.small.render(knob.label(), True, TEXT if lit else DIM)
+        label = self.small.render(knob.label(), True, TEXT if lit or active else FAINT)
         surface.blit(label, (x - label.get_width() // 2, y + radius + 10))
         text = knob.shown()
         while self.small.size(text)[0] > room and len(text) > 4:
             text = text[:-2] + '.'
-        value = self.small.render(text, True, accent if moved else DIM)
+        value = self.small.render(text, True, accent if moved and active else DIM if active else FAINT)
         surface.blit(value, (x - value.get_width() // 2, y + radius + 26))
 
     def _caption(self, surface, text, y, width):

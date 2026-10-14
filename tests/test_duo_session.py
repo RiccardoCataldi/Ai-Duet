@@ -132,6 +132,24 @@ class DuoSessionTest(unittest.TestCase):
         self.assertTrue(all(60 <= p <= 83 for p in pitches), pitches)
         self.assertEqual(self.session.octaves(), (60, 83))
 
+    def test_it_says_what_it_does_and_which_knobs_are_in_effect_then(self):
+        self.assertEqual(self.session.state()['mode'], 'listening')
+        for i, pitch in enumerate((60, 64, 67, 72)):
+            self.clock.t = i * 0.25
+            self.session.hear(self.clock.t, 0.2, pitch)
+        state = self.session.state()
+        self.assertEqual(state['mode'], 'accompanying')
+        self.assertIn('under', state['active'])
+        self.assertNotIn('echo', state['active'])
+        self.clock.t = 2.0
+        state = self.session.state()
+        self.assertEqual(state['mode'], 'answering')
+        self.assertIn('echo', state['active'])
+        self.assertNotIn('under', state['active'])
+        self.clock.t = 10.0
+        self.assertEqual(self.session.state()['mode'], 'alone')
+        self.assertEqual(self.session.listener.chord_name({7, 11, 2, 5}), 'G7')
+
     def test_knobs_given_at_the_start_hold_from_the_first_note(self):
         session = DuoSession(UniformModel(), 'cpu', clock=self.clock, memory=60.4, stay=0.9)
         self.assertEqual(session.memory, 60)

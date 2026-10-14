@@ -106,6 +106,7 @@ class Roll:
         self.glow = {c: glow_sprite(colour) for c, (_, _, colour) in PLAYERS.items()}
         self.instruments = {}     # channel -> the instrument it plays, if not PLAYERS'
         self.ai_range = None      # (lowest, highest) pitch the model may play, shown above the keyboard
+        self.status = None        # what the model hears and does, shown at the top
 
         self.font = pygame.font.Font(None, 26)
         self.small = pygame.font.Font(None, 22)
@@ -166,6 +167,9 @@ class Roll:
             sub = self.small.render(instrument, True, DIM)
             screen.blit(sub, (x + 26 + label.get_width(), 28))
             x += 50 + label.get_width() + sub.get_width()
+        if self.status:
+            status = self.font.render(self.status, True, AI)
+            screen.blit(status, ((self.size[0] - status.get_width()) // 2, 25))
         title = self.font.render('AI Duet', True, DIM)
         screen.blit(title, (self.size[0] - title.get_width() - 28, 25))
         if clock is not None:
@@ -286,7 +290,8 @@ def live(port_name, server):
                 panel.handle(event, side.topleft)
         now = time.monotonic()
         roll.instruments = {player: sound.GM[engine.sound[player]['instrument']] for player in PLAYERS}
-        mind = {knob.name: round(knob.value) for knob in panel.server.knobs if knob.name in ('lowest', 'highest')}
+        roll.status = panel.mind.status()
+        mind = {name: round(knob.value) for name, knob in panel.mind.knobs.items() if name in ('lowest', 'highest')}
         if len(mind) == 2:
             low, high = sorted(mind.values())
             roll.ai_range = (12 * (low + 1), 12 * (high + 1) + 11)

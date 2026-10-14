@@ -94,6 +94,15 @@ class Listener:
                     best, chord = score, tones
         return chord
 
+    @staticmethod
+    def chord_name(tones):
+        """The name of a chord from chord(), e.g. G7."""
+        for root in range(12):
+            for suffix, shape in CHORDS.items():
+                if {(root + step) % 12 for step in shape} == tones:
+                    return NAMES[root] + suffix
+        return None
+
     def pulse(self, now):
         """(tatum, phase) in seconds: your onsets fall on phase + k * tatum. None until your rhythm is regular."""
         onsets = sorted({round(n[0], 2) for n in self.notes if n[0] > now - PULSE_S})

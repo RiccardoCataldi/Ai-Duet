@@ -57,6 +57,14 @@ KNOBS = {
     'lowest': (0, 0, 8, 'octave_from', "the lowest octave it may play"),
     'highest': (8, 0, 8, 'octave_to', "the highest octave it may play"),
 }
+# what it is doing, and the knobs that shape its notes then; the others wait for their moment
+IN_EFFECT = {
+    'listening': set(),
+    'accompanying': {'space', 'under'},     # you are playing
+    'answering': {'min_step', 'answer', 'echo'},   # your phrase just ended
+    'alone': {'min_step', 'answer'},        # you rest, and it has answered
+}
+ALWAYS = {'out_of_key', 'chord_tone', 'stay', 'no_repeat', 'memory', 'temperature', 'top_p', 'lowest', 'highest'}
 
 
 def knob(name, value):
@@ -86,6 +94,26 @@ class DuoSession:
             setattr(self, name, knob(name, value))
         if 'stay' in knobs:
             self.listener.stay(self.stay)
+
+    def state(self):
+        """What it hears and what it is doing: {'mode', 'key', 'chord', 'bpm', 'active': the knobs in effect}."""
+        if self.base is None or self.heard_at is None:
+            return {'mode': 'listening', 'key': None, 'chord': None, 'bpm': None, 'active': sorted(ALWAYS)}
+        now = self.now()
+        at = self._seconds(now)
+        if now - self.heard_at < PLAYING:
+            mode = 'accompanying'
+        elif now - self.heard_at < self.answer and len(self.listener.phrase(at)) > 1:
+            mode = 'answering'
+        else:
+            mode = 'alone'
+        key, sure = self.listener.key()
+        chord = self.listener.chord(at)
+        pulse = self.listener.pulse(at)
+        active = ALWAYS | IN_EFFECT[mode] | ({'grid'} if pulse else set())
+        return {'mode': mode, 'key': self.listener.name(key) if sure > 0.3 else None,
+                'chord': self.listener.chord_name(chord) if chord else None,
+                'bpm': round(60 / self.listener.beat(pulse[0])) if pulse else None, 'active': sorted(active)}
 
     def octaves(self):
         """The lowest and highest pitch it may play, from C of its lowest octave to B of its highest (C4 = 60)."""

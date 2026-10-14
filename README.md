@@ -38,10 +38,24 @@ python pianoroll.py video generated/<time>.mid --audio duo.ogg -o duo.mp4
 
 ![The piano roll with the knobs](samples/duo/pianoroll-knobs.png)
 
-Beside it are knobs (`knobs.py`) to turn while you play, in three tabs. Drag a knob up or down (hold Shift to turn it finely) or use the wheel over it; a double click puts it back, and hovering shows what it does. A knob you moved shows its value in colour.
+At the top it says what the model hears and does: your key, the chord you play, your tempo once it has found your pulse, and whether it is accompanying you, answering your phrase or playing on its own. Beside it are knobs (`knobs.py`) to turn while you play, in four tabs. Drag a knob up or down (hold Shift to turn it finely) or use the wheel over it; a double click puts it back, and hovering says what it does. A knob is dimmed while what it shapes is not happening: `dialogue` while you play, `role` while you rest, `groove` until it has found your pulse.
 
-- **AI mind**: the parameters of the duo (see *Tuning by ear* below). Each turn reaches the model on the Jetson from its next note on, and holds for the next duos until the server restarts; the server log shows it (`duo: min_step = 32`).
+- **AI mind**: musical controls, each with its two ends; each turns some of the model's knobs on the Jetson along a line whose middle is the duo's default:
+
+  | Control | From ... to | Turns |
+  |---|---|---|
+  | density | sparse ... dense | `min_step`, `space` |
+  | harmony | inside ... outside | `out_of_key`, `chord_tone` |
+  | role | accompanies ... leads (while you play) | `under` |
+  | dialogue | ignores you ... answers you (when your phrase ends) | `answer`, `echo` |
+  | groove | loose ... tight | `grid` |
+  | risk | safe ... adventurous | `temperature`, `top_p` |
+  | focus | on you ... on itself | `memory` |
+  | key follow | steady ... quick | `stay` |
+
+  and `lowest`, `highest`: the octaves it may play. The model's knobs are kept in `~/.config/ai-duet/mind.json` and given back to the server whenever it restarts; the server log shows each turn (`duo: min_step = 32`).
 - **Your sound** and **AI sound** (`sound.py`, in FluidSynth on the laptop): the General MIDI instrument, volume, the envelope (attack, decay, sustain and release, as how many times longer than the instrument's own, through SoundFont NRPNs), the reverb send, and a delay: its time, how loud the first echo is (0 turns it off) and how much each echo keeps of the one before. FluidSynth has no delay, so the echoes are MIDI notes, played on channels 2 (yours) and 3 (the model's). The sound is kept in `~/.config/ai-duet/sound.json` across sessions.
+- **Advanced**: every knob of the model on its own (see *Tuning by ear* below).
 
 ## Requirements
 
@@ -111,7 +125,7 @@ The session tests need torch, so run them there: `python -m unittest tests.test_
 
 **The model's sound** (top of `main.py`): `RING`, `RING_S` (how long its notes ring past what the model wrote), `SOFTER` (how much softer than you it plays), `GENERATED_CONTROLS` (volume, reverb and chorus sends, until the piano roll sets its own); the room itself is `REVERB` and `CHORUS` in `run_duet.sh`; the rest is in the **Your sound** and **AI sound** knobs.
 
-**Tuning by ear:** turn the knobs in the piano roll while you play (they are `KNOBS` in `music_transformer/duo.py`, with their ranges); to change a default, edit it at the top of `music_transformer/duo.py`:
+**Tuning by ear:** turn the knobs in the **Advanced** tab of the piano roll while you play (they are `KNOBS` in `music_transformer/duo.py`, with their ranges); to change a default, edit it at the top of `music_transformer/duo.py`:
 - `MIN_STEP`, `SPACE`: time between the model's onsets, when you rest and while you play
 - `OUT_OF_KEY`, `CHORD_TONE`: how strongly it keeps to your key and leans on the chord you are playing
 - `UNDER`: how firmly it stays below you while you play
