@@ -12,15 +12,24 @@ An interactive AI music generation system that responds to MIDI keyboard input i
 
 ## Listen
 
-A one-minute improvisation, played live on the Jetson duo: a human on piano, the model on a warm electric piano with more reverb. The model heard it in C major.
+A one-minute improvisation, played live on the Jetson duo: a human on piano (amber), the model on a warm electric piano (teal). The model heard it in C major.
 
-- [duo-c-major.ogg](samples/duo/duo-c-major.ogg) (audio, open *View raw* to play it in the browser)
-- [duo-c-major.mid](samples/duo/duo-c-major.mid) (MIDI: track 1 is the human, track 2 the model)
+[![The duo as a piano roll: click to watch the video with sound](samples/duo/duo-c-major.gif)](samples/duo/duo-c-major.mp4)
 
-The audio is the saved MIDI rendered with the same FluidSynth settings as `run_duet.sh`:
+- [duo-c-major.mp4](samples/duo/duo-c-major.mp4): the video with sound (the preview above is a silent ten-second excerpt)
+- [duo-c-major.ogg](samples/duo/duo-c-major.ogg): the audio alone (open *View raw* to play it in the browser)
+- [duo-c-major.mid](samples/duo/duo-c-major.mid): the MIDI (track 1 is the human, track 2 the model)
+
+The audio is the saved MIDI rendered with the same FluidSynth settings as `run_duet.sh`, and the video is the piano roll drawn over it:
 ```bash
+eval "$(grep -E '^(REVERB|CHORUS)=' run_duet.sh)"
 fluidsynth -ni -g 0.7 $REVERB $CHORUS -T oga -F duo.ogg /usr/share/sounds/sf2/FluidR3_GM.sf2 generated/<time>.mid
+python pianoroll.py video generated/<time>.mid --audio duo.ogg -o duo.mp4
 ```
+
+## Piano roll
+
+`pianoroll.py` shows the duo as you play: your notes and the model's rise from the keyboard, each in its own colour, and the keys light up while they sound. `run_duet.sh` opens it next to the duo (F: fullscreen, Esc: close). It listens to what `main.py` sends to FluidSynth on Midi Through, so it needs nothing from the model; to open it by hand, run `python pianoroll.py`.
 
 ## Requirements
 
@@ -72,17 +81,17 @@ The model runs on a Jetson Orin Nano (JetPack 6) and the laptop handles MIDI and
 - Power mode MAXN_SUPER (it persists across reboots)
 - `ssh jetson` works from the laptop with a key
 
-**On the laptop, once:** FluidSynth with the `FluidR3_GM` soundfont, and the venv `.venv` of this repo.
+**On the laptop, once:** FluidSynth with the `FluidR3_GM` soundfont, and the venv `.venv` of this repo with `pip install mido python-rtmidi pygame imageio-ffmpeg` (imageio-ffmpeg brings its own ffmpeg, for the videos).
 
 **Every time the Jetson boots:**
 ```bash
 ssh -t jetson sudo jetson_clocks   # the clocks go back to defaults after every reboot
 ./run_duet.sh                      # from this repo, on the laptop
 ```
-`run_duet.sh` restarts everything: the server on the Jetson, the SSH tunnel on port 8765, FluidSynth and `main.py` on the KeyStep.
+`run_duet.sh` restarts everything: the server on the Jetson, the SSH tunnel on port 8765, FluidSynth, `main.py` on the KeyStep and the piano roll.
 
 **Logs:** `~/amt_server.log` on the Jetson (`duo: started`, the key it hears you in each time it changes, then how many notes it heard and played);
-`duet.log` and `fluidsynth.log` on the laptop in `$LOG_DIR` (default `/tmp`).
+`duet.log`, `fluidsynth.log` and `pianoroll.log` on the laptop in `$LOG_DIR` (default `/tmp`).
 
 **Changing the code on the Jetson:** it does not pull from git; copy the files over, e.g.
 `scp music_transformer/duo.py jetson:~/Ai-Duet/music_transformer/`, then run `./run_duet.sh` again.
@@ -137,6 +146,7 @@ ai-music/
 ├── trained_models/      # Place for your trained models
 ├── generated/           # Directory for saved generated music
 ├── main.py             # Main application
+├── pianoroll.py        # Piano roll of the duo, live or as a video
 └── requirements.txt    # Project dependencies
 ```
 

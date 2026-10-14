@@ -1,9 +1,10 @@
 #!/bin/bash
-# Restart the duet: AMT server on the Jetson, SSH tunnel, FluidSynth and main.py on the laptop.
+# Restart the duet: AMT server on the Jetson, SSH tunnel, FluidSynth, main.py and the piano roll on the laptop.
 cd "$(dirname "$0")"
 LOG=${LOG_DIR:-/tmp}
 
 pkill -INT -f "^\.venv/bin/python main\.py"; sleep 2; pkill -f "^\.venv/bin/python main\.py"
+pkill -f "^\.venv/bin/python pianoroll\.py"
 pkill -x timidity
 pkill -x fluidsynth
 pkill -f "^ssh -N .*-L 8765:localhost:8765"
@@ -29,3 +30,6 @@ KEYSTEP=$(.venv/bin/python -c "import rtmidi; print(next(i for i, p in enumerate
 echo "$KEYSTEP" | AMT_SERVER=localhost:8765 PYTHONUNBUFFERED=1 setsid nohup .venv/bin/python main.py > "$LOG/duet.log" 2>&1 &
 sleep 4
 grep -E "chosen|output opened|Playing with" "$LOG/duet.log"
+
+# the piano roll of you and the model (F: fullscreen)
+setsid nohup .venv/bin/python pianoroll.py > "$LOG/pianoroll.log" 2>&1 < /dev/null &
