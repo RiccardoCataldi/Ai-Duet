@@ -33,13 +33,15 @@ class DuoTest(unittest.TestCase):
         self.duo.note_on(65, 90, 105)
         self.assertEqual(self.sent[-1], "on 5.000 0.100 65\n")
 
-    def test_the_model_plays_its_notes_when_they_are_due_and_releases_them(self):
+    def test_the_model_plays_its_notes_when_they_are_due_and_lets_them_ring(self):
         self.duo.receive("note 2.000 0.500 67\n")
         self.duo.tick(101.9)
         self.assertEqual(self.out.generated_on(), [])
         self.duo.tick(102.0)
         self.assertEqual(self.out.generated_on(), [67])
         self.duo.tick(102.6)
+        self.assertNotIn(([0x80, 67, 0], True), self.out.messages)
+        self.duo.tick(102.0 + 0.5 + main.RING_S)
         self.assertIn(([0x80, 67, 0], True), self.out.messages)
 
     def test_a_cut_drops_the_notes_that_have_not_sounded(self):

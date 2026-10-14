@@ -1,4 +1,5 @@
 import os
+import signal
 import socket
 import statistics
 import sys
@@ -15,6 +16,11 @@ LATE_S = 0.15            # a note of the model that arrives later than this is s
 GUESS_S = 0.3            # how long we guess your note will last before you have played any
 INPUT_PROGRAM = 0        # Acoustic Grand Piano
 GENERATED_PROGRAM = 4    # Electric Piano 1
+# the model's sound: a warm, sustained electric piano in a big room
+GENERATED_CONTROLS = ((7, 100), (91, 115), (93, 60))  # volume, reverb send, chorus send
+SOFTER = 0.8             # the model plays a little softer than you: a darker, warmer electric piano
+RING = 1.6               # its notes ring this much longer than the model wrote them, as if with a light pedal
+RING_S = 0.4             # and at least this many seconds more
 
 
 class Duo:
@@ -74,8 +80,8 @@ class Duo:
                     continue
                 if pitch in self.sounding:
                     self._release(pitch, now)
-                self.midi_rec.play_midi_message([0x90, pitch, self.velocity], is_generated=True)
-                self.sounding[pitch] = (now, now + duration)
+                self.midi_rec.play_midi_message([0x90, pitch, self._velocity()], is_generated=True)
+                self.sounding[pitch] = (now, now + max(duration * RING, duration + RING_S))
 
     def stop(self, now):
         with self.lock:
@@ -86,7 +92,10 @@ class Duo:
     def _release(self, pitch, now):
         onset, _ = self.sounding.pop(pitch)
         self.midi_rec.play_midi_message([0x80, pitch, 0], is_generated=True)
-        self.notes.append((onset, now, pitch, self.velocity, True))
+        self.notes.append((onset, now, pitch, self._velocity(), True))
+
+    def _velocity(self):
+        return max(1, round(self.velocity * SOFTER))
 
     def save(self, path):
         if not self.notes:
@@ -101,6 +110,8 @@ class Duo:
                     messages.append((onset - origin, 'note_on', pitch, velocity))
                     messages.append((offset - origin, 'note_off', pitch, 0))
             track = mido.MidiTrack([mido.Message('program_change', channel=channel, program=program)])
+            if generated:
+                track += [mido.Message('control_change', channel=channel, control=c, value=v) for c, v in GENERATED_CONTROLS]
             last = 0
             for at, kind, pitch, velocity in sorted(messages):
                 track.append(mido.Message(kind, channel=channel, note=pitch, velocity=velocity, time=ticks(at) - last))
@@ -127,6 +138,8 @@ if __name__ == "__main__":
     midiRec = CK_rec(myPort, 0x90, debug=False)
     midiRec.set_input_instrument(INPUT_PROGRAM)
     midiRec.set_generated_instrument(GENERATED_PROGRAM)
+    for control, value in GENERATED_CONTROLS:
+        midiRec.play_midi_message([0xB0 | midiRec.generated_channel, control, value])
     sock, started = connect(os.environ.get('AMT_SERVER', 'localhost:8765'))
     duo = Duo(lambda line: sock.sendall(line.encode()), midiRec, started)
 
@@ -150,6 +163,9 @@ if __name__ == "__main__":
             duo.note_off(pitch, time.monotonic())
 
     codeK.set_callback(on_midi)
+    # run_duet.sh starts us in the background, where SIGINT is ignored: stop and save on SIGINT or SIGTERM anyway
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, signal.default_int_handler)
     print("Play: the model improvises with you. Ctrl+C to stop.")
 
     try:

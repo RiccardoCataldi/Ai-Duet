@@ -17,8 +17,10 @@ ssh jetson 'pkill -f "^python -u -m music_transformer\.server"; sleep 2
   grep -E "listening|Traceback" ~/amt_server.log'
 
 setsid nohup ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 8765:localhost:8765 jetson > /dev/null 2>&1 < /dev/null &
-# small audio buffers (-z 128 -c 2) keep the keyboard responsive
-setsid nohup fluidsynth -a pipewire -m alsa_seq -i -s -z 128 -c 2 -g 0.7 /usr/share/sounds/sf2/FluidR3_GM.sf2 > "$LOG/fluidsynth.log" 2>&1 < /dev/null &
+# small audio buffers (-z 128 -c 2) keep the keyboard responsive; a big, dark room and a slow chorus warm up the sound
+REVERB="-o synth.reverb.room-size=0.75 -o synth.reverb.damp=0.6 -o synth.reverb.width=1.0 -o synth.reverb.level=0.8"
+CHORUS="-o synth.chorus.depth=6 -o synth.chorus.speed=0.25 -o synth.chorus.level=1.5"
+setsid nohup fluidsynth -a pipewire -m alsa_seq -i -s -z 128 -c 2 -g 0.7 $REVERB $CHORUS /usr/share/sounds/sf2/FluidR3_GM.sf2 > "$LOG/fluidsynth.log" 2>&1 < /dev/null &
 sleep 3
 SYNTH=$(aconnect -o | awk -F'[ :]' '/FLUID Synth/ {print $2; exit}')
 aconnect 14:0 "$SYNTH:0" && echo "Midi Through -> FluidSynth ($SYNTH:0)"
