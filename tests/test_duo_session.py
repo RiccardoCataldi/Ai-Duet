@@ -115,6 +115,21 @@ class DuoSessionTest(unittest.TestCase):
         runs = [tuple(pitches[i:i + duo.NO_REPEAT]) for i in range(len(pitches) - duo.NO_REPEAT + 1)]
         self.assertEqual(len(runs), len(set(runs)))
 
+    def test_a_knob_turned_while_it_plays_changes_its_next_notes(self):
+        session = DuoSession(StuckModel(), 'cpu', clock=self.clock)
+        session.hear(0.0, 0.3, 60)
+        for _ in range(10):
+            session.play()
+        session.turn(min_step=50, top_p=2.0)
+        self.assertEqual(session.knobs()['top_p'], 1.0)   # kept within its range
+        times = sorted({session.play()[0] for _ in range(20)})
+        self.assertGreaterEqual(min(b - a for a, b in zip(times, times[1:])), 0.5 - 1e-9)
+
+    def test_knobs_given_at_the_start_hold_from_the_first_note(self):
+        session = DuoSession(UniformModel(), 'cpu', clock=self.clock, memory=60.4, stay=0.9)
+        self.assertEqual(session.memory, 60)
+        self.assertEqual(session.knobs()['stay'], 0.9)
+
     def test_the_model_remembers_all_of_you_but_only_the_last_moments_of_itself(self):
         self.session.hear(0.0, 0.3, 60)
         while self.clock.t < 5:

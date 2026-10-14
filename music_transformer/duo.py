@@ -14,7 +14,7 @@ from anticipation.config import CONTEXT_SIZE, MAX_DUR, MAX_PITCH, MAX_TIME, TIME
 from anticipation.vocab import AUTOREGRESS, DUR_OFFSET, NOTE_OFFSET, TIME_OFFSET
 from anticipation.sample import safe_logits, nucleus
 
-from music_transformer.listener import Listener
+from music_transformer.listener import STAY, Listener
 
 LOOKAHEAD = 100   # ticks the model plays ahead of now (1 s)
 MARGIN = 15       # ticks: a new note of the model sounds no earlier than this, to cover sampling and the network
@@ -39,20 +39,54 @@ GRID = 2          # ticks off your pulse that its onsets may land (your beat whi
 WINDOW = 2000     # ticks of the duo the model keeps hearing when the context fills up or the clock runs out
 KEEP = 600        # tokens kept at most in that case
 
+# the knobs you can turn while you play (the piano roll shows them): default, lowest, highest, unit, what it does
+KNOBS = {
+    'min_step': (MIN_STEP, 5, 60, 'ticks', "time between its onsets when you rest"),
+    'space': (SPACE, 10, 150, 'ticks', "time between its onsets while you play"),
+    'out_of_key': (OUT_OF_KEY, 0.0, 6.0, '', "how strongly it keeps to your key"),
+    'chord_tone': (CHORD_TONE, 0.0, 4.0, '', "how much it leans on the chord you play"),
+    'under': (UNDER, 0.0, 4.0, '', "how firmly it stays below you while you play"),
+    'answer': (ANSWER, 0, 1000, 'ticks', "how long after your phrase it answers it"),
+    'echo': (ECHO, 0.0, 6.0, '', "how closely its answer follows your intervals"),
+    'grid': (GRID, 0, 20, 'ticks', "how far off your pulse its onsets may land"),
+    'stay': (STAY, 0.80, 0.995, '', "how sure it must be you modulated (lower = sooner)"),
+    'no_repeat': (NO_REPEAT, 2, 8, 'notes', "the length of runs it may not repeat"),
+    'memory': (MEMORY, 50, 2000, 'ticks', "how much of its own playing it remembers"),
+    'temperature': (1.0, 0.5, 1.5, '', "how adventurous its choices are"),
+    'top_p': (0.98, 0.80, 1.0, '', "how many unlikely notes it still considers"),
+}
+
+
+def knob(name, value):
+    """`value` for the knob `name`, kept within its range."""
+    default, low, high, *_ = KNOBS[name]
+    value = min(max(value, low), high)
+    return round(value) if isinstance(default, int) else float(value)
+
 
 class DuoSession:
-    def __init__(self, model, device, you=0, me=4, top_p=0.98, temperature=1.0, memory=MEMORY, space=SPACE,
-                 clock=time.monotonic):
+    def __init__(self, model, device, you=0, me=4, clock=time.monotonic, started=None, **knobs):
         self.model, self.device = model, device
         self.you, self.me = you, me    # General MIDI programs: piano, electric piano
-        self.top_p, self.temperature = top_p, temperature
-        self.memory, self.space = memory, space
         self.listener = Listener()
+        for name, (default, *_) in KNOBS.items():
+            setattr(self, name, default)
+        self.turn(**knobs)
         self.heard_at = None           # context time of your last note
-        self.clock, self.started = clock, clock()
+        self.clock, self.started = clock, clock() if started is None else started
         self.base = None               # session tick of time 0 in the context: your first note
         self.seq = [AUTOREGRESS]       # complete events in time order, yours and the model's
         self.past, self.fed = None, 0  # the KV cache covers seq[:fed]
+
+    def turn(self, **knobs):
+        """Sets knobs (see KNOBS), kept within their range; they take effect from the model's next note."""
+        for name, value in knobs.items():
+            setattr(self, name, knob(name, value))
+        if 'stay' in knobs:
+            self.listener.stay(self.stay)
+
+    def knobs(self):
+        return {name: getattr(self, name) for name in KNOBS}
 
     def now(self):
         return round((self.clock() - self.started) * TIME_RESOLUTION) - self.base
@@ -72,12 +106,11 @@ class DuoSession:
         self.seq += [TIME_OFFSET + self.heard_at,
                      DUR_OFFSET + min(max(round(duration * TIME_RESOLUTION), 1), MAX_DUR - 1),
                      NOTE_OFFSET + self.you * MAX_PITCH + pitch]
-        if self.memory is not None:
-            # otherwise its own line, two or three times denser than yours, drowns you out
-            events = self._events()
-            kept = [e for e in events if self._instrument(e[2]) != self.me or e[0] - TIME_OFFSET >= self.heard_at - self.memory]
-            if len(kept) < len(events):
-                self._restart(kept)
+        # otherwise its own line, two or three times denser than yours, drowns you out
+        events = self._events()
+        kept = [e for e in events if self._instrument(e[2]) != self.me or e[0] - TIME_OFFSET >= self.heard_at - self.memory]
+        if len(kept) < len(events):
+            self._restart(kept)
         return cut
 
     @torch.no_grad()
@@ -86,7 +119,7 @@ class DuoSession:
         self._fit()
         now, last, line = self.now(), self._last_time(), self._my_line()
         you_play = self.heard_at is not None and now - self.heard_at < PLAYING
-        step = self.space if self.space is not None and you_play else MIN_STEP
+        step = self.space if you_play else self.min_step
         earliest = max(last, now + MARGIN)
         latest = min(max(earliest, last + MAX_REST), MAX_TIME - 1)
         if line:
@@ -127,11 +160,11 @@ class DuoSession:
         if pulse is None:
             return mask
         unit = self.listener.beat(pulse[0]) if you_play else pulse[0]
-        first = math.ceil((self._seconds(earliest) - pulse[1]) / unit - GRID / (unit * TIME_RESOLUTION))
+        first = math.ceil((self._seconds(earliest) - pulse[1]) / unit - self.grid / (unit * TIME_RESOLUTION))
         grid = torch.full_like(mask, -float('inf'))
         for k in range(first, first + math.ceil((latest - earliest) / (unit * TIME_RESOLUTION)) + 2):
             tick = round((pulse[1] + k * unit) * TIME_RESOLUTION) - self.base
-            grid[TIME_OFFSET + max(tick - GRID, earliest):TIME_OFFSET + min(tick + GRID, latest) + 1] = 0
+            grid[TIME_OFFSET + max(tick - self.grid, earliest):TIME_OFFSET + min(tick + self.grid, latest) + 1] = 0
         on = mask + grid
         return on if torch.isfinite(on).any() else mask
 
@@ -139,13 +172,13 @@ class DuoSession:
         """Logits added to its pitches at `tick`: your chord and key; under you while you play; your phrase after it."""
         at, you_play = self._seconds(tick), tick - self.heard_at < PLAYING
         in_key, chord = self.listener.in_key(), self.listener.chord(at) or set()
-        bias = torch.tensor([CHORD_TONE * (p % 12 in chord) - OUT_OF_KEY * (1 - in_key[p % 12])
+        bias = torch.tensor([self.chord_tone * (p % 12 in chord) - self.out_of_key * (1 - in_key[p % 12])
                              for p in range(MAX_PITCH)], dtype=torch.float)
         if you_play:
             recent = at - PLAYING / TIME_RESOLUTION - 1
             low = min((n[2] for n in self.listener.notes if n[0] >= recent), default=MAX_PITCH)
-            bias[low:] -= UNDER
-        elif line and tick - self.heard_at < ANSWER:
+            bias[low:] -= self.under
+        elif line and tick - self.heard_at < self.answer:
             phrase = self.listener.phrase(at)
             answered = sum(time_ > self.heard_at for time_, _ in line)
             if 0 < answered < len(phrase):
@@ -153,7 +186,7 @@ class DuoSession:
                 if in_key[echo % 12] < 0.5:   # your interval, bent into your key as a sequence would be
                     echo += 1 if in_key[(echo + 1) % 12] >= in_key[(echo - 1) % 12] else -1
                 if 0 <= echo < MAX_PITCH:
-                    bias[echo] += ECHO
+                    bias[echo] += self.echo
         return bias.to(self.device)
 
     def _logits(self):
@@ -175,15 +208,14 @@ class DuoSession:
                     break
         return line[::-1]
 
-    @staticmethod
-    def _banned(line, tick):
+    def _banned(self, line, tick):
         """Notes the model may not play at `tick`: one it is already playing there, or one that repeats a run."""
         banned = {note for time_, note in line if time_ == tick}   # Lakh MIDI is full of doubled notes
         notes = [note for _, note in line]
-        run = notes[len(notes) - NO_REPEAT + 1:]
-        for i in range(len(notes) - NO_REPEAT + 1):
-            if notes[i:i + NO_REPEAT - 1] == run:
-                banned.add(notes[i + NO_REPEAT - 1])
+        run = notes[len(notes) - self.no_repeat + 1:]
+        for i in range(len(notes) - self.no_repeat + 1):
+            if notes[i:i + self.no_repeat - 1] == run:
+                banned.add(notes[i + self.no_repeat - 1])
         return banned
 
     def _forget_after(self, tick):

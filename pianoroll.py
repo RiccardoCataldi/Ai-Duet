@@ -1,12 +1,14 @@
 """
 A piano roll of the duo: your notes and the model's rise from the keyboard as you play.
 
-    python pianoroll.py                                   # live, next to main.py (F: fullscreen, Esc: quit)
+    python pianoroll.py                                   # live, next to main.py (F: fullscreen, K: knobs, Esc: quit)
     python pianoroll.py video duo.mid --audio duo.ogg -o duo.mp4
 
-Live, it listens to what main.py sends to FluidSynth on Midi Through: channel 0 is you, channel 1 the model.
+Live, it listens to what main.py sends to FluidSynth on Midi Through: channel 0 is you, channel 1 the model;
+the knobs beside it (knobs.py) turn the model's on the Jetson while you play.
 """
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -218,11 +220,12 @@ class Live:
         return self.notes
 
 
-def live(port_name):
+def live(port_name, server):
     import rtmidi
+    from knobs import PANEL_W, Panel
     pygame.init()
     pygame.display.set_caption('AI Duet')
-    screen = pygame.display.set_mode(SIZE, pygame.RESIZABLE)
+    screen = pygame.display.set_mode((SIZE[0] + PANEL_W, SIZE[1]), pygame.RESIZABLE)
     midi = rtmidi.MidiIn()
     ports = midi.get_ports()
     port = next((i for i, p in enumerate(ports) if port_name in p), None)
@@ -231,17 +234,33 @@ def live(port_name):
     midi.open_port(port)
     heard = Live()
     midi.set_callback(lambda event, data=None: heard.message(event[0], time.monotonic()))
-    roll, clock, started = Roll(screen.get_size()), pygame.time.Clock(), time.monotonic()
+    panel, shown = Panel(server), True
+
+    def layout():
+        width, height = screen.get_size()
+        side = PANEL_W if shown and width > 2 * PANEL_W else 0
+        area = pygame.Rect(0, 0, width - side, height)
+        return Roll(area.size), screen.subsurface(area), pygame.Rect(area.right, 0, side, height)
+
+    (roll, view, side), clock, started = layout(), pygame.time.Clock(), time.monotonic()
     while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                 return
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_f:
-                pygame.display.toggle_fullscreen()
+            if event.type == pygame.KEYDOWN and event.key in (pygame.K_f, pygame.K_k):
+                if event.key == pygame.K_f:
+                    pygame.display.toggle_fullscreen()
+                else:
+                    shown = not shown
+                roll, view, side = layout()
             if event.type == pygame.VIDEORESIZE:
-                roll = Roll(screen.get_size())
+                roll, view, side = layout()
+            if side.width:
+                panel.handle(event, side.topleft)
         now = time.monotonic()
-        roll.draw(screen, [tuple(n) for n in heard.visible(now, screen.get_height())], now, now - started)
+        roll.draw(view, [tuple(n) for n in heard.visible(now, view.get_height())], now, now - started)
+        if side.width:
+            panel.draw(screen.subsurface(side))
         pygame.display.flip()
         clock.tick(FPS)
 
@@ -276,8 +295,10 @@ if __name__ == '__main__':
     parser.add_argument('--audio', help='video: its rendering, to put under the picture')
     parser.add_argument('-o', '--out', default='duo.mp4')
     parser.add_argument('--port', default='Midi Through', help='live: the MIDI port to listen to')
+    parser.add_argument('--server', default=os.environ.get('AMT_SERVER', 'localhost:8765'),
+                        help='live: the AMT server whose knobs to turn')
     args = parser.parse_args()
     if args.mode == 'video':
         video(args.midi, args.audio, args.out)
     else:
-        live(args.port)
+        live(args.port, args.server)

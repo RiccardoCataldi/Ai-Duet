@@ -28,6 +28,19 @@ class ListenerTest(unittest.TestCase):
         self.assertLessEqual(keys.index('Eb major'), 10)
         self.assertEqual(keys[keys.index('Eb major'):], ['Eb major'] * (len(keys) - keys.index('Eb major')))
 
+    def test_a_lower_stay_follows_a_modulation_sooner(self):
+        heard = []
+        for stay in (0.97, 0.85):
+            listener = Listener()
+            listener.stay(stay)
+            end = play(listener, C_MAJOR)
+            for i, pitch in enumerate(EB_MAJOR):
+                listener.hear(end + i * 0.25, 0.2, pitch)
+                if listener.name(listener.key()[0]) == 'Eb major':
+                    heard.append(i)
+                    break
+        self.assertLess(heard[1], heard[0])
+
     def test_a_passing_note_does_not_change_the_key(self):
         listener = Listener()
         end = play(listener, C_MAJOR)

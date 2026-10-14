@@ -29,7 +29,11 @@ python pianoroll.py video generated/<time>.mid --audio duo.ogg -o duo.mp4
 
 ## Piano roll
 
-`pianoroll.py` shows the duo as you play: your notes and the model's rise from the keyboard, each in its own colour, and the keys light up while they sound. `run_duet.sh` opens it next to the duo (F: fullscreen, Esc: close). It listens to what `main.py` sends to FluidSynth on Midi Through, so it needs nothing from the model; to open it by hand, run `python pianoroll.py`.
+`pianoroll.py` shows the duo as you play: your notes and the model's rise from the keyboard, each in its own colour, and the keys light up while they sound. `run_duet.sh` opens it next to the duo (F: fullscreen, K: show or hide the knobs, Esc: close). It listens to what `main.py` sends to FluidSynth on Midi Through; to open it by hand, run `python pianoroll.py`.
+
+![The piano roll with the knobs](samples/duo/pianoroll-knobs.png)
+
+Beside it are the model's knobs (`knobs.py`): the parameters of the duo, turned while you play. Drag a knob up or down (hold Shift to turn it finely) or use the wheel over it; a double click puts it back, and hovering shows what it does. A knob you moved shows its value in the model's colour. Each turn reaches the model on the Jetson from its next note on, and holds for the next duos until the server restarts; the server log shows it (`duo: min_step = 32`).
 
 ## Requirements
 
@@ -99,7 +103,7 @@ The session tests need torch, so run them there: `python -m unittest tests.test_
 
 **The model's sound** (top of `main.py`): `RING`, `RING_S` (how long its notes ring past what the model wrote), `SOFTER` (how much softer than you it plays), `GENERATED_CONTROLS` (volume, reverb and chorus sends); the room itself is `REVERB` and `CHORUS` in `run_duet.sh`.
 
-**Tuning by ear** (top of `music_transformer/duo.py`):
+**Tuning by ear:** turn the knobs in the piano roll while you play (they are `KNOBS` in `music_transformer/duo.py`, with their ranges); to change a default, edit it at the top of `music_transformer/duo.py`:
 - `MIN_STEP`, `SPACE`: time between the model's onsets, when you rest and while you play
 - `OUT_OF_KEY`, `CHORD_TONE`: how strongly it keeps to your key and leans on the chord you are playing
 - `UNDER`: how firmly it stays below you while you play
@@ -147,6 +151,7 @@ ai-music/
 ├── generated/           # Directory for saved generated music
 ├── main.py             # Main application
 ├── pianoroll.py        # Piano roll of the duo, live or as a video
+├── knobs.py            # The model's knobs beside the live piano roll
 └── requirements.txt    # Project dependencies
 ```
 

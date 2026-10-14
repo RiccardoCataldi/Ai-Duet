@@ -26,29 +26,39 @@ KEEP_S = 20.0    # seconds of your notes kept
 MEMBER = np.array([[(pc - k % 12) % 12 in SCALES[k >= 12] for pc in range(12)] for k in range(24)], float)
 
 
-def _keys():
-    profiles = np.array([np.roll(MAJOR, k) for k in range(12)] + [np.roll(MINOR, k) for k in range(12)])
-    emit = profiles / profiles.sum(1, keepdims=True)
+def _transitions(stay):
+    """How likely each key is to move to each other one, at each note."""
     signature = [7 * (k % 12 + (3 if k >= 12 else 0)) % 12 for k in range(24)]   # a minor key shares its relative's
     far = np.array([[min((a - b) % 12, (b - a) % 12) + 0.5 * ((i < 12) != (j < 12))
                      for j, b in enumerate(signature)] for i, a in enumerate(signature)])
     move = np.exp(-FAR * far)
     np.fill_diagonal(move, 0)
-    move = (1 - STAY) * move / move.sum(1, keepdims=True)
-    np.fill_diagonal(move, STAY)
-    return np.log(emit) * SHARPNESS, move
+    move = (1 - stay) * move / move.sum(1, keepdims=True)
+    np.fill_diagonal(move, stay)
+    return move
 
 
-EMIT, MOVE = _keys()
+def _keys():
+    profiles = np.array([np.roll(MAJOR, k) for k in range(12)] + [np.roll(MINOR, k) for k in range(12)])
+    emit = profiles / profiles.sum(1, keepdims=True)
+    return np.log(emit) * SHARPNESS
+
+
+EMIT, MOVE = _keys(), _transitions(STAY)
 
 
 class Listener:
     def __init__(self):
         self.belief = np.full(24, 1 / 24)
         self.notes = []   # (onset, duration, pitch), oldest first
+        self.move = MOVE
+
+    def stay(self, stay):
+        """Sets STAY for this listener."""
+        self.move = _transitions(stay)
 
     def hear(self, onset, duration, pitch):
-        belief = (self.belief @ MOVE) * np.exp(EMIT[:, pitch % 12])
+        belief = (self.belief @ self.move) * np.exp(EMIT[:, pitch % 12])
         self.belief = belief / belief.sum()
         self.notes = [n for n in self.notes if n[0] > onset - KEEP_S] + [(onset, duration, pitch)]
 
