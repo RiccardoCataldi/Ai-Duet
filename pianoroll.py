@@ -104,6 +104,8 @@ class Roll:
             alpha = round(255 * (1 - y / (height // 3)) ** 2)
             self.fade.fill((*BACKGROUND[0], alpha), pygame.Rect(0, y, width, 1))
         self.glow = {c: glow_sprite(colour) for c, (_, _, colour) in PLAYERS.items()}
+        self.instruments = {}     # channel -> the instrument it plays, if not PLAYERS'
+
         self.font = pygame.font.Font(None, 26)
         self.small = pygame.font.Font(None, 22)
 
@@ -142,7 +144,8 @@ class Roll:
 
     def _legend(self, screen, clock):
         x = 28
-        for name, instrument, colour in PLAYERS.values():
+        for channel, (name, instrument, colour) in PLAYERS.items():
+            instrument = self.instruments.get(channel, instrument).lower()
             pygame.draw.circle(screen, colour, (x + 6, 34), 6)
             label = self.font.render(name, True, TEXT)
             screen.blit(label, (x + 20, 25))
@@ -222,6 +225,7 @@ class Live:
 
 def live(port_name, server):
     import rtmidi
+    import sound
     from knobs import PANEL_W, Panel
     pygame.init()
     pygame.display.set_caption('AI Duet')
@@ -232,9 +236,18 @@ def live(port_name, server):
     if port is None:
         sys.exit(f"No MIDI port named {port_name!r} in {ports}")
     midi.open_port(port)
+    out = rtmidi.MidiOut()
+    out.open_port(next(i for i, p in enumerate(out.get_ports()) if port_name in p))
+    engine = sound.Engine(out.send_message)   # your sound and the model's, and their echoes, on the same port
     heard = Live()
-    midi.set_callback(lambda event, data=None: heard.message(event[0], time.monotonic()))
-    panel, shown = Panel(server), True
+
+    def hear(event, data=None):
+        now = time.monotonic()
+        heard.message(event[0], now)
+        engine.heard(event[0], now)
+
+    midi.set_callback(hear)
+    panel, shown = Panel(server, engine), True
 
     def layout():
         width, height = screen.get_size()
@@ -258,6 +271,7 @@ def live(port_name, server):
             if side.width:
                 panel.handle(event, side.topleft)
         now = time.monotonic()
+        roll.instruments = {player: sound.GM[engine.sound[player]['instrument']] for player in PLAYERS}
         roll.draw(view, [tuple(n) for n in heard.visible(now, view.get_height())], now, now - started)
         if side.width:
             panel.draw(screen.subsurface(side))

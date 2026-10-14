@@ -9,6 +9,7 @@ from collections import deque
 
 import mido
 
+import sound
 from CK_rec.setup import Setup
 from CK_rec.rec_classes import CK_rec
 
@@ -119,6 +120,8 @@ class Duo:
             mid.tracks.append(track)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         mid.save(path)
+        # the sound it was played with, as the piano roll's knobs left it: python sound.py bake renders the duo with it
+        sound.save(sound.load(), os.path.splitext(path)[0] + '.sound.json')
         print(f"Duet saved as {path}")
 
 

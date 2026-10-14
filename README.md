@@ -20,10 +20,11 @@ A one-minute improvisation, played live on the Jetson duo: a human on piano (amb
 - [duo-c-major.ogg](samples/duo/duo-c-major.ogg): the audio alone (open *View raw* to play it in the browser)
 - [duo-c-major.mid](samples/duo/duo-c-major.mid): the MIDI (track 1 is the human, track 2 the model)
 
-The audio is the saved MIDI rendered with the same FluidSynth settings as `run_duet.sh`, and the video is the piano roll drawn over it:
+The audio is the saved MIDI rendered with the same FluidSynth settings as `run_duet.sh`, and the video is the piano roll drawn over it. `sound.py bake` first puts in the sound the duo was played with (instruments, envelopes, reverb sends and the delay's echoes), which `main.py` saves next to it:
 ```bash
+python sound.py bake generated/<time>.mid duo-baked.mid
 eval "$(grep -E '^(REVERB|CHORUS)=' run_duet.sh)"
-fluidsynth -ni -g 0.7 $REVERB $CHORUS -T oga -F duo.ogg /usr/share/sounds/sf2/FluidR3_GM.sf2 generated/<time>.mid
+fluidsynth -ni -g 0.7 $REVERB $CHORUS -T oga -F duo.ogg /usr/share/sounds/sf2/FluidR3_GM.sf2 duo-baked.mid
 python pianoroll.py video generated/<time>.mid --audio duo.ogg -o duo.mp4
 ```
 
@@ -33,7 +34,10 @@ python pianoroll.py video generated/<time>.mid --audio duo.ogg -o duo.mp4
 
 ![The piano roll with the knobs](samples/duo/pianoroll-knobs.png)
 
-Beside it are the model's knobs (`knobs.py`): the parameters of the duo, turned while you play. Drag a knob up or down (hold Shift to turn it finely) or use the wheel over it; a double click puts it back, and hovering shows what it does. A knob you moved shows its value in the model's colour. Each turn reaches the model on the Jetson from its next note on, and holds for the next duos until the server restarts; the server log shows it (`duo: min_step = 32`).
+Beside it are knobs (`knobs.py`) to turn while you play, in three tabs. Drag a knob up or down (hold Shift to turn it finely) or use the wheel over it; a double click puts it back, and hovering shows what it does. A knob you moved shows its value in colour.
+
+- **AI mind**: the parameters of the duo (see *Tuning by ear* below). Each turn reaches the model on the Jetson from its next note on, and holds for the next duos until the server restarts; the server log shows it (`duo: min_step = 32`).
+- **Your sound** and **AI sound** (`sound.py`, in FluidSynth on the laptop): the General MIDI instrument, volume, the envelope (attack, decay, sustain and release, as how many times longer than the instrument's own, through SoundFont NRPNs), the reverb send, and a delay: its time, how loud the first echo is (0 turns it off) and how much each echo keeps of the one before. FluidSynth has no delay, so the echoes are MIDI notes, played on channels 2 (yours) and 3 (the model's). The sound is kept in `~/.config/ai-duet/sound.json` across sessions.
 
 ## Requirements
 
@@ -101,7 +105,7 @@ ssh -t jetson sudo jetson_clocks   # the clocks go back to defaults after every 
 `scp music_transformer/duo.py jetson:~/Ai-Duet/music_transformer/`, then run `./run_duet.sh` again.
 The session tests need torch, so run them there: `python -m unittest tests.test_duo_session`.
 
-**The model's sound** (top of `main.py`): `RING`, `RING_S` (how long its notes ring past what the model wrote), `SOFTER` (how much softer than you it plays), `GENERATED_CONTROLS` (volume, reverb and chorus sends); the room itself is `REVERB` and `CHORUS` in `run_duet.sh`.
+**The model's sound** (top of `main.py`): `RING`, `RING_S` (how long its notes ring past what the model wrote), `SOFTER` (how much softer than you it plays), `GENERATED_CONTROLS` (volume, reverb and chorus sends, until the piano roll sets its own); the room itself is `REVERB` and `CHORUS` in `run_duet.sh`; the rest is in the **Your sound** and **AI sound** knobs.
 
 **Tuning by ear:** turn the knobs in the piano roll while you play (they are `KNOBS` in `music_transformer/duo.py`, with their ranges); to change a default, edit it at the top of `music_transformer/duo.py`:
 - `MIN_STEP`, `SPACE`: time between the model's onsets, when you rest and while you play
@@ -151,7 +155,8 @@ ai-music/
 ├── generated/           # Directory for saved generated music
 ├── main.py             # Main application
 ├── pianoroll.py        # Piano roll of the duo, live or as a video
-├── knobs.py            # The model's knobs beside the live piano roll
+├── knobs.py            # The knobs beside the live piano roll
+├── sound.py            # Your sound and the model's: instruments, envelope, reverb, delay
 └── requirements.txt    # Project dependencies
 ```
 
