@@ -54,6 +54,8 @@ KNOBS = {
     'memory': (MEMORY, 50, 2000, 'ticks', "how much of its own playing it remembers"),
     'temperature': (1.0, 0.5, 1.5, '', "how adventurous its choices are"),
     'top_p': (0.98, 0.80, 1.0, '', "how many unlikely notes it still considers"),
+    'lowest': (0, 0, 8, 'octave_from', "the lowest octave it may play"),
+    'highest': (8, 0, 8, 'octave_to', "the highest octave it may play"),
 }
 
 
@@ -84,6 +86,11 @@ class DuoSession:
             setattr(self, name, knob(name, value))
         if 'stay' in knobs:
             self.listener.stay(self.stay)
+
+    def octaves(self):
+        """The lowest and highest pitch it may play, from C of its lowest octave to B of its highest (C4 = 60)."""
+        low, high = sorted((self.lowest, self.highest))
+        return 12 * (low + 1), min(12 * (high + 1) + 11, MAX_PITCH - 1)
 
     def knobs(self):
         return {name: getattr(self, name) for name in KNOBS}
@@ -138,7 +145,8 @@ class DuoSession:
             elif slot == 1:
                 mask[DUR_OFFSET:DUR_OFFSET + MAX_DUR] = 0
             else:
-                mask[NOTE_OFFSET + self.me * MAX_PITCH:NOTE_OFFSET + (self.me + 1) * MAX_PITCH] = 0
+                low, high = self.octaves()
+                mask[NOTE_OFFSET + self.me * MAX_PITCH + low:NOTE_OFFSET + self.me * MAX_PITCH + high + 1] = 0
                 for note in self._banned(line, self.seq[-2] - TIME_OFFSET):
                     mask[note] = -float('inf')
                 if self.heard_at is not None:

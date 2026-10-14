@@ -117,6 +117,7 @@ The session tests need torch, so run them there: `python -m unittest tests.test_
 - `NO_REPEAT`: the length of runs it may not repeat
 - `MEMORY`: how much of its own playing it remembers (shorter = listens to you more)
 - `temperature` and `top_p` in `DuoSession`: how adventurous its choices are
+- `lowest`, `highest` (knobs only, in `KNOBS`): the octaves it may play, from C of the lowest to B of the highest (C4 is middle C); the piano roll draws them as a line over the keys
 
 ## Instrument Selection
 

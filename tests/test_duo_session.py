@@ -125,6 +125,13 @@ class DuoSessionTest(unittest.TestCase):
         times = sorted({session.play()[0] for _ in range(20)})
         self.assertGreaterEqual(min(b - a for a, b in zip(times, times[1:])), 0.5 - 1e-9)
 
+    def test_it_plays_only_in_the_octaves_it_is_given_even_turned_the_wrong_way_round(self):
+        self.session.turn(lowest=5, highest=4)
+        self.session.hear(0.0, 0.3, 30)
+        pitches = [self.session.play()[2] for _ in range(60)]
+        self.assertTrue(all(60 <= p <= 83 for p in pitches), pitches)
+        self.assertEqual(self.session.octaves(), (60, 83))
+
     def test_knobs_given_at_the_start_hold_from_the_first_note(self):
         session = DuoSession(UniformModel(), 'cpu', clock=self.clock, memory=60.4, stay=0.9)
         self.assertEqual(session.memory, 60)

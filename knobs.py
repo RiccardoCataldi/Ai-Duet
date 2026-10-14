@@ -58,6 +58,8 @@ class Knob:
             return f"{value} notes"
         if self.unit == 'program':
             return sound.GM[value]
+        if self.unit in ('octave_from', 'octave_to'):
+            return f"{'C' if self.unit == 'octave_from' else 'B'}{value}"
         if self.unit == 'ms':
             return f"{value} ms"
         if self.unit == 'times':

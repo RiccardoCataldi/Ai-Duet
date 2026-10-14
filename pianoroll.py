@@ -105,6 +105,7 @@ class Roll:
             self.fade.fill((*BACKGROUND[0], alpha), pygame.Rect(0, y, width, 1))
         self.glow = {c: glow_sprite(colour) for c, (_, _, colour) in PLAYERS.items()}
         self.instruments = {}     # channel -> the instrument it plays, if not PLAYERS'
+        self.ai_range = None      # (lowest, highest) pitch the model may play, shown above the keyboard
 
         self.font = pygame.font.Font(None, 26)
         self.small = pygame.font.Font(None, 22)
@@ -139,8 +140,21 @@ class Roll:
                             special_flags=pygame.BLEND_ADD)
         screen.blit(self.fade, (0, 0))
         pygame.draw.line(screen, (60, 66, 88), (0, top - 1), (self.size[0], top - 1), 2)
+        self._range(screen, top)
         self.keyboard.draw(screen, lit)
         self._legend(screen, clock)
+
+    def _range(self, screen, top):
+        """A line in the model's colour over the keys it may play, when it may not play them all."""
+        if self.ai_range is None:
+            return
+        keys = self.keyboard.x
+        low, high = max(self.ai_range[0], min(keys)), min(self.ai_range[1], max(keys))
+        if low > high or (low == min(keys) and high == max(keys)):
+            return
+        left = keys[low][0]
+        right = keys[high][0] + keys[high][1]
+        pygame.draw.line(screen, AI, (round(left) + 2, top - 4), (round(right) - 2, top - 4), 3)
 
     def _legend(self, screen, clock):
         x = 28
@@ -272,6 +286,10 @@ def live(port_name, server):
                 panel.handle(event, side.topleft)
         now = time.monotonic()
         roll.instruments = {player: sound.GM[engine.sound[player]['instrument']] for player in PLAYERS}
+        mind = {knob.name: round(knob.value) for knob in panel.server.knobs if knob.name in ('lowest', 'highest')}
+        if len(mind) == 2:
+            low, high = sorted(mind.values())
+            roll.ai_range = (12 * (low + 1), 12 * (high + 1) + 11)
         roll.draw(view, [tuple(n) for n in heard.visible(now, view.get_height())], now, now - started)
         if side.width:
             panel.draw(screen.subsurface(side))
