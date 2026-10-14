@@ -16,11 +16,9 @@ An interactive AI music generation system that responds to MIDI keyboard input i
 
 ## Listen
 
-A one-minute improvisation, played live on the Jetson duo: a human on piano (amber), the model on a warm electric piano (teal). The model heard it in C major.
+The video at the top: a one-minute improvisation, played live on the Jetson duo: a human on piano (amber), the model on a warm electric piano (teal). The model heard it in C major.
 
-[![The duo as a piano roll: click to watch the video with sound](samples/duo/duo-c-major.mp4)]
-
-- [duo-c-major.mp4](samples/duo/duo-c-major.mp4): the video with sound (the preview above is a silent ten-second excerpt)
+- the video with sound, at the top of this page ([duo-c-major.mp4](samples/duo/duo-c-major.mp4) in the repo)
 - [duo-c-major.ogg](samples/duo/duo-c-major.ogg): the audio alone (open *View raw* to play it in the browser)
 - [duo-c-major.mid](samples/duo/duo-c-major.mid): the MIDI (track 1 is the human, track 2 the model)
 
