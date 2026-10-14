@@ -10,6 +10,18 @@ An interactive AI music generation system that responds to MIDI keyboard input i
 - Different instruments for input and generated music
 - MIDI file saving and playback capabilities
 
+## Listen
+
+A one-minute improvisation, played live on the Jetson duo: a human on piano, the model on a warm electric piano with more reverb. The model heard it in C major.
+
+- [duo-c-major.ogg](samples/duo/duo-c-major.ogg) (audio, open *View raw* to play it in the browser)
+- [duo-c-major.mid](samples/duo/duo-c-major.mid) (MIDI: track 1 is the human, track 2 the model)
+
+The audio is the saved MIDI rendered with the same FluidSynth settings as `run_duet.sh`:
+```bash
+fluidsynth -ni -g 0.7 $REVERB $CHORUS -T oga -F duo.ogg /usr/share/sounds/sf2/FluidR3_GM.sf2 generated/<time>.mid
+```
+
 ## Requirements
 
 - Python 3.8+
@@ -75,6 +87,8 @@ ssh -t jetson sudo jetson_clocks   # the clocks go back to defaults after every 
 **Changing the code on the Jetson:** it does not pull from git; copy the files over, e.g.
 `scp music_transformer/duo.py jetson:~/Ai-Duet/music_transformer/`, then run `./run_duet.sh` again.
 The session tests need torch, so run them there: `python -m unittest tests.test_duo_session`.
+
+**The model's sound** (top of `main.py`): `RING`, `RING_S` (how long its notes ring past what the model wrote), `SOFTER` (how much softer than you it plays), `GENERATED_CONTROLS` (volume, reverb and chorus sends); the room itself is `REVERB` and `CHORUS` in `run_duet.sh`.
 
 **Tuning by ear** (top of `music_transformer/duo.py`):
 - `MIN_STEP`, `SPACE`: time between the model's onsets, when you rest and while you play
