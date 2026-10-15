@@ -26,13 +26,14 @@ QUIETEST = 4                         # velocity under which an echo is not playe
 
 # name: default for you, default for the model, lowest, highest, unit, what it does
 SOUND = {
-    'instrument': (0, 4, 0, 127, 'program', "the General MIDI instrument"),
+    'instrument': (0, 0, 0, 127, 'program', "the General MIDI instrument"),
     'volume': (100, 100, 0, 127, 'level', "how loud it plays"),
+    'pan': (40, 88, 0, 127, 'pan', "where it sits, from left to right: two pianos, as on a record"),
     'attack': (0, 0, -2400, 4800, 'times', "how slowly a note starts, against the instrument's own"),
     'decay': (0, 0, -2400, 4800, 'times', "how slowly a held note falls to its sustain"),
     'sustain': (0, 0, 0, 600, 'amount', "how much quieter a held note settles (an organ more than a piano, which dies away anyway)"),
     'release': (0, 0, -2400, 4800, 'times', "how long a note rings after it is let go"),
-    'reverb': (40, 115, 0, 127, 'level', "how much of it goes to the reverb"),
+    'reverb': (40, 70, 0, 127, 'level', "how much of it goes to the reverb"),
     'delay': (350, 350, 50, 1000, 'ms', "the time between its echoes"),
     'echo': (0.0, 0.0, 0.0, 1.0, 'level', "how loud the first echo is (0: no delay)"),
     'feedback': (0.4, 0.4, 0.0, 0.85, 'level', "how much each echo keeps of the one before"),
@@ -90,6 +91,8 @@ def messages(player, name, value):
             out.append([0xC0 | channel, int(value)])
         elif name == 'volume':
             out.append([0xB0 | channel, 7, int(value)])
+        elif name == 'pan':
+            out.append([0xB0 | channel, 10, int(value)])
         elif name == 'reverb':
             out.append([0xB0 | channel, 91, int(value)])
         elif name in ENVELOPE:
@@ -195,7 +198,7 @@ def bake(path, out, sound):
             raw = message.bytes()
             events.append((now, raw))
             events += echoes.plan(raw, now, sound)
-        elif message.type == 'control_change' and message.control not in (7, 91):
+        elif message.type == 'control_change' and message.control not in (7, 10, 91):
             events.append((now, message.bytes()))
     played, gate = [], Echoes()
     for when, raw in sorted(events, key=lambda e: e[0]):

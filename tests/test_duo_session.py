@@ -64,12 +64,13 @@ class DuoSessionTest(unittest.TestCase):
         self.session.hear(3.0, 0.3, 60)
         notes = list(self.fill())
         self.assertGreater(len(notes), 0)
-        onsets = [onset for onset, _, _ in notes]
+        onsets = [onset for onset, *_ in notes]
         self.assertEqual(onsets, sorted(onsets))
         self.assertGreaterEqual(onsets[0], 3.0 + duo.MARGIN / 100)
         self.assertLessEqual(max(b - a for a, b in zip([3.0] + onsets, onsets)), duo.MAX_REST / 100 + 1e-9)
         instruments = {(n - NOTE_OFFSET) // MAX_PITCH for n in self.session.seq[3::3][1:]}
-        self.assertEqual(instruments, {self.session.me})
+        self.assertLessEqual(instruments, {self.session.me, self.session.left})
+        self.assertLessEqual({hand for *_, hand in notes}, {'left', 'right'})
 
     def test_your_note_drops_only_what_the_model_has_not_played_yet(self):
         self.session.hear(0.0, 0.3, 60)
@@ -100,20 +101,24 @@ class DuoSessionTest(unittest.TestCase):
 
 
     def test_the_model_stays_a_soloist_even_when_it_wants_to_loop(self):
-        session = DuoSession(StuckModel(), 'cpu', clock=self.clock)
-        session.hear(0.0, 0.3, 60)
-        notes = [session.play() for _ in range(40)]
-        onsets = {}
-        for onset, _, pitch in notes:
-            onsets.setdefault(onset, []).append(pitch)
-        for pitches in onsets.values():
-            self.assertEqual(len(pitches), len(set(pitches)))
-            self.assertLessEqual(len(pitches), duo.MAX_CHORD)
-        times = sorted(onsets)
-        self.assertGreaterEqual(min(b - a for a, b in zip(times, times[1:])), duo.MIN_STEP / 100 - 1e-9)
-        pitches = [pitch for _, _, pitch in notes]
-        runs = [tuple(pitches[i:i + duo.NO_REPEAT]) for i in range(len(pitches) - duo.NO_REPEAT + 1)]
-        self.assertEqual(len(runs), len(set(runs)))
+        for hands in (1, 2):
+            session = DuoSession(StuckModel(), 'cpu', clock=self.clock, hands=hands)
+            session.hear(0.0, 0.3, 60)
+            notes = [session.play() for _ in range(40)]
+            for hand, most, step in (('right', duo.MAX_CHORD, duo.MIN_STEP), ('left', duo.LEFT_CHORD, duo.LEFT_STEP)):
+                onsets = {}
+                for onset, _, pitch, played in notes:
+                    if played == hand:
+                        onsets.setdefault(onset, []).append(pitch)
+                for pitches in onsets.values():
+                    self.assertEqual(len(pitches), len(set(pitches)))
+                    self.assertLessEqual(len(pitches), most)
+                times = sorted(onsets)
+                if len(times) > 1:
+                    self.assertGreaterEqual(min(b - a for a, b in zip(times, times[1:])), step / 100 - 1e-9)
+                pitches = [pitch for _, _, pitch, played in notes if played == hand]
+                runs = [tuple(pitches[i:i + duo.NO_REPEAT]) for i in range(len(pitches) - duo.NO_REPEAT + 1)]
+                self.assertEqual(len(runs), len(set(runs)))
 
     def test_a_knob_turned_while_it_plays_changes_its_next_notes(self):
         session = DuoSession(StuckModel(), 'cpu', clock=self.clock)
@@ -122,7 +127,7 @@ class DuoSessionTest(unittest.TestCase):
             session.play()
         session.turn(min_step=50, top_p=2.0)
         self.assertEqual(session.knobs()['top_p'], 1.0)   # kept within its range
-        times = sorted({session.play()[0] for _ in range(20)})
+        times = sorted({onset for onset, *_, hand in (session.play() for _ in range(20)) if hand == 'right'})
         self.assertGreaterEqual(min(b - a for a, b in zip(times, times[1:])), 0.5 - 1e-9)
 
     def test_it_plays_only_in_the_octaves_it_is_given_even_turned_the_wrong_way_round(self):
@@ -178,7 +183,7 @@ class DuoSessionTest(unittest.TestCase):
             notes.append(self.session.play())
             self.clock.t = notes[-1][0]
             self.session.hear(self.clock.t, 0.2, (60, 64, 67)[len(notes) % 3])
-        in_key = sum(pitch % 12 in (0, 4, 7) for _, _, pitch in notes) / len(notes)
+        in_key = sum(pitch % 12 in (0, 4, 7) for _, _, pitch, _ in notes) / len(notes)
         self.assertGreater(in_key, 0.35)   # 3 pitch classes of 12: 25% without ears
 
     def play_scale(self, pitches, start):
@@ -191,7 +196,7 @@ class DuoSessionTest(unittest.TestCase):
         c_major = [60, 62, 64, 65, 67, 69, 71, 72, 67, 64, 60, 62, 65, 69, 71, 67]
         self.play_scale(c_major, 0.1)
         self.play_scale([p + 3 for p in c_major], self.clock.t)
-        pitches = [pitch % 12 for _ in range(4) for _, _, pitch in self.fill()] + \
+        pitches = [pitch % 12 for _ in range(4) for _, _, pitch, _ in self.fill()] + \
                   [self.session.play()[2] % 12 for _ in range(60)]
         self.assertGreater(sum(p in (3, 5, 7, 8, 10, 0, 2) for p in pitches) / len(pitches), 0.75)   # 58% by chance
         self.assertLess(sum(p in (4, 11) for p in pitches) / len(pitches), 0.1)   # only in C: A stays possible, as in Bb
@@ -202,6 +207,50 @@ class DuoSessionTest(unittest.TestCase):
         for onset in onsets:
             off = (onset - 0.1) % 0.3
             self.assertLessEqual(min(off, 0.3 - off), duo.GRID / 100 + 1e-9)
+
+    def follow(self, count):
+        """The model's next `count` notes, the clock following them as it would while they sound."""
+        notes = []
+        for _ in range(count):
+            notes.append(self.session.play())
+            self.clock.t = notes[-1][0]
+        return notes
+
+    def test_with_two_hands_each_keeps_to_its_register_and_with_one_it_plays_a_single_line(self):
+        self.session.hear(0.0, 0.3, 72)
+        notes = self.follow(80)
+        left = [pitch for _, _, pitch, hand in notes if hand == 'left']
+        right = [pitch for _, _, pitch, hand in notes if hand == 'right']
+        self.assertTrue(left and right)
+        self.assertLessEqual(max(left), duo.LEFT_TOP)
+        self.assertGreaterEqual(min(right), duo.RIGHT_BOTTOM)
+        self.session.turn(hands=1)
+        self.assertEqual({hand for *_, hand in self.follow(20)}, {'right'})
+
+    def test_octaves_with_room_for_one_hand_leave_it_to_that_hand(self):
+        self.session.turn(lowest=1, highest=2)   # C1 to B2: below the right hand's F3
+        self.session.hear(0.0, 0.3, 40)
+        notes = [self.session.play() for _ in range(40)]
+        self.assertTrue(all(24 <= pitch <= 47 for _, _, pitch, _ in notes))
+        self.assertEqual({hand for *_, hand in notes}, {'left'})
+
+    def test_it_may_leave_longer_silences_when_you_let_it(self):
+        self.session.turn(max_rest=600, hands=1)
+        self.clock.t = 3.0
+        self.session.hear(3.0, 0.3, 60)
+        notes = list(self.fill())
+        onsets = [onset for onset, *_ in notes]
+        self.assertLessEqual(max(b - a for a, b in zip([3.0] + onsets, onsets)), 6.0 + 1e-9)
+
+    def test_it_colours_your_chord_with_its_tensions_even_outside_your_key(self):
+        for pitch in (48, 52, 55, 59):   # Cmaj7, C in the bass
+            self.session.hear(0.0, 2.0, pitch)
+        bias = self.session._partner(30, [])
+        d, f_sharp, c_sharp = 62, 66, 61   # its 9th, its #11 (not in C major), and a wrong note
+        self.assertGreater(bias[d], bias[c_sharp])
+        self.assertGreater(bias[f_sharp], bias[c_sharp])
+        self.session.turn(tension=0)
+        self.assertAlmostEqual(float(self.session._partner(30, [])[d]), float(bias[d]) - duo.TENSION, places=5)
 
 if __name__ == '__main__':
     unittest.main()

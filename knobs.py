@@ -31,9 +31,9 @@ MIND_FILE = os.path.expanduser('~/.config/ai-duet/mind.json')   # the model's kn
 # the middle is the duo's default
 MACROS = [
     ('density', ('sparse', 'dense'), "how many notes it plays",
-     {'min_step': (60, 20, 8), 'space': (150, 50, 15)}),
-    ('harmony', ('inside', 'outside'), "how far it strays from your key and the chord you play",
-     {'out_of_key': (5.0, 2.0, 0.0), 'chord_tone': (3.0, 1.0, 0.0)}),
+     {'min_step': (60, 20, 8), 'space': (150, 50, 15), 'max_rest': (500, 200, 100)}),
+    ('harmony', ('inside', 'outside'), "how far it strays from your key, and how it colours the chord you play",
+     {'out_of_key': (5.0, 2.0, 0.0), 'chord_tone': (3.0, 1.0, 0.0), 'tension': (0.0, 1.0, 3.0)}),
     ('role', ('accompanies', 'leads'), "while you play: it stays below you, or goes anywhere",
      {'under': (3.0, 1.0, 0.0)}),
     ('dialogue', ('ignores you', 'answers you'), "when your phrase ends: how soon and how closely it answers it",
@@ -93,6 +93,11 @@ class Knob:
             return sound.GM[value]
         if self.unit in ('octave_from', 'octave_to'):
             return f"{'C' if self.unit == 'octave_from' else 'B'}{value}"
+        if self.unit == 'pan':
+            side = round((value - 64) / 63 * 100)
+            return 'centre' if side == 0 else f"{'L' if side < 0 else 'R'} {abs(side)}%"
+        if self.unit == 'hands':
+            return 'one hand' if value == 1 else 'two hands'
         if self.unit == 'ms':
             return f"{value} ms"
         if self.unit == 'times':
@@ -296,12 +301,15 @@ class Panel:
         _, accent, _, status, waits = self.tabs[self.tab]
         self._tabs(surface)
         surface.blit(self.small.render(status(), True, DIM), (24, 58))
-        cell_w = (width - 24) / COLUMNS
+        knobs = self.knobs()
         cell_h = 104
-        radius = 24
+        rows = max(1, (height - 116 - 84) // cell_h + 1)   # the rows that fit above the caption
+        columns = max(COLUMNS, math.ceil(len(knobs) / rows))
+        cell_w = (width - 24) / columns
+        radius = 24 if columns == COLUMNS else 20
         self.places = {}
-        for i, knob in enumerate(self.knobs()):
-            col, row = i % COLUMNS, i // COLUMNS
+        for i, knob in enumerate(knobs):
+            col, row = i % columns, i // columns
             centre = (round(12 + cell_w * (col + 0.5)), round(116 + row * cell_h))
             self.places[knob.name] = (centre, radius)
             lit = knob is self.hover or (self.held and self.held[0] is knob)

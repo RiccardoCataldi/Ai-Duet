@@ -33,7 +33,7 @@ GRID = (255, 255, 255, 14)
 TEXT = (210, 214, 226)
 DIM = (120, 126, 146)
 
-PLAYERS = {0: ('You', 'piano', YOU), 1: ('AI', 'electric piano', AI)}
+PLAYERS = {0: ('You', 'piano', YOU), 1: ('AI', 'piano', AI)}
 
 
 def is_black(pitch):

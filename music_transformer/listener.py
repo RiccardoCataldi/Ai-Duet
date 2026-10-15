@@ -12,7 +12,15 @@ NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B']
 MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]   # Krumhansl-Kessler, from C
 MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
 SCALES = ((0, 2, 4, 5, 7, 9, 11), (0, 2, 3, 5, 7, 8, 10, 11))                      # major, minor with both sevenths
-CHORDS = {'': (0, 4, 7), 'm': (0, 3, 7), '7': (0, 4, 7, 10), 'm7': (0, 3, 7, 10), 'dim': (0, 3, 6)}
+# the chords of jazz harmony: C6 is Am7 and Cm6 is Am7b5 (and dim7 is itself four times), told apart by the bass
+CHORDS = {'': (0, 4, 7), 'm': (0, 3, 7), '7': (0, 4, 7, 10), 'm7': (0, 3, 7, 10), 'dim': (0, 3, 6),
+          'maj7': (0, 4, 7, 11), '6': (0, 4, 7, 9), 'm6': (0, 3, 7, 9), 'm7b5': (0, 3, 6, 10), 'dim7': (0, 3, 6, 9),
+          'mMaj7': (0, 3, 7, 11), 'sus4': (0, 5, 7), '7sus4': (0, 5, 7, 10), '+': (0, 4, 8)}
+# the tensions a jazz pianist colours each chord with, in semitones above its root: 9, #11 or 11, 13
+TENSIONS = {'': (2, 6, 9), 'maj7': (2, 6, 9), '6': (2, 6), 'm': (2, 5), 'm7': (2, 5, 9), 'm6': (2, 5),
+            'mMaj7': (2, 5, 9), '7': (2, 9), 'm7b5': (5, 8), 'dim': (2, 5, 8, 11), 'dim7': (2, 5, 8, 11),
+            'sus4': (2, 9), '7sus4': (2, 9), '+': (2, 6)}
+BASS = 0.15      # how much the lowest sounding note says the chord's root is
 
 STAY = 0.97      # chance per note that the key stays: lower follows a modulation sooner but flickers on passing notes
 SHARPNESS = 2.0  # how much one note says about the key
@@ -77,22 +85,43 @@ class Listener:
 
     def chord(self, now):
         """Pitch classes of the chord you are playing now, or None when nothing is sounding."""
-        weight = np.zeros(12)
+        harmony = self.harmony(now)
+        return harmony[2] if harmony else None
+
+    def harmony(self, now):
+        """(root, kind, pitch classes) of the chord you are playing now, e.g. (7, '7', {7, 11, 2, 5}); or None."""
+        weight, bass = np.zeros(12), None
         for onset, duration, pitch in self.notes:
             if onset <= now:
                 weight[pitch % 12] += 0.5 ** (max(now - onset - duration, 0) / CHORD_S)
+                if onset + duration >= now and (bass is None or pitch < bass):
+                    bass = pitch
         if weight.sum() < 0.5:
             return None
         scale = set(np.flatnonzero(self.in_key() > 0.5))
-        best, chord = -1, None
+        norm = np.linalg.norm(weight)
+        best, harmony = -1, None
         for root in range(12):
-            for shape in CHORDS.values():
+            for kind, shape in CHORDS.items():
                 tones = {(root + step) % 12 for step in shape}
-                score = sum(weight[p] for p in tones) / math.sqrt(len(tones)) / np.linalg.norm(weight) \
-                    + 0.1 * tones.issubset(scale)
+                score = sum(weight[p] for p in tones) / math.sqrt(len(tones)) / norm \
+                    + 0.1 * tones.issubset(scale) + BASS * (bass is not None and bass % 12 == root)
                 if score > best:
-                    best, chord = score, tones
-        return chord
+                    best, harmony = score, (root, kind, tones)
+        return harmony
+
+    def chord_label(self, now):
+        """The name of the chord you are playing now, e.g. G7 (C6 rather than Am7 when C is in the bass)."""
+        harmony = self.harmony(now)
+        return NAMES[harmony[0]] + harmony[1] if harmony else None
+
+    def tensions(self, now):
+        """Pitch classes that colour the chord you are playing now (its 9, 11 or #11, 13), or an empty set."""
+        harmony = self.harmony(now)
+        if not harmony:
+            return set()
+        root, kind, tones = harmony
+        return {(root + step) % 12 for step in TENSIONS[kind]} - tones
 
     @staticmethod
     def chord_name(tones):

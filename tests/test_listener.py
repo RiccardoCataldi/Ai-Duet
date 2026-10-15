@@ -54,6 +54,22 @@ class ListenerTest(unittest.TestCase):
             listener.hear(10.0, 1.0, pitch)
         self.assertEqual(listener.chord(10.3), {7, 11, 2, 5})
 
+    def test_it_hears_jazz_chords_and_tells_them_apart_by_the_bass(self):
+        for pitches, name in (((48, 52, 55, 59), 'Cmaj7'), ((48, 52, 55, 57), 'C6'), ((45, 52, 55, 60), 'Am7'),
+                              ((47, 53, 57, 62), 'Bm7b5'), ((43, 48, 50, 53), 'G7sus4')):
+            listener = Listener()
+            play(listener, C_MAJOR)
+            for pitch in pitches:
+                listener.hear(10.0, 1.0, pitch)
+            self.assertEqual(listener.chord_label(10.3), name)
+
+    def test_the_tensions_of_a_major_seventh_are_its_9th_sharp_11th_and_13th(self):
+        listener = Listener()
+        for pitch in (48, 52, 55, 59):
+            listener.hear(0.0, 1.0, pitch)
+        self.assertEqual(listener.tensions(0.3), {2, 6, 9})
+        self.assertEqual(Listener().tensions(0.3), set())
+
     def test_it_finds_your_pulse_and_hears_where_your_phrase_ends(self):
         listener = Listener()
         end = play(listener, C_MAJOR, start=0.1, step=0.3)

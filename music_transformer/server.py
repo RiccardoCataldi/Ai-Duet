@@ -6,7 +6,7 @@ Serve the duo over TCP so the model can run on another machine (e.g. a Jetson).
 
 One line per message, times in seconds since the connection opened:
     client -> server   "on <onset> <duration> <pitch>"   you pressed a key (the duration is a guess)
-    server -> client   "note <onset> <duration> <pitch>" the model's next note
+    server -> client   "note <onset> <duration> <pitch> <hand>"   the model's next note, of its left or right hand
     server -> client   "cut <onset>"                     forget the model's notes from <onset> on: they are resampled
 One duo at a time; a second connection waits for the first to close.
 
@@ -32,7 +32,7 @@ from music_transformer.duo import ALWAYS, KNOBS, LOOKAHEAD, DuoSession, knob
 STATE_S = 0.25    # how often a knobs connection hears what the duo is doing
 
 
-def make_handler(generator):
+def make_handler(generator, left=None):
     lock = threading.Lock()
     knobs = {name: default for name, (default, *_) in KNOBS.items()}   # as last turned, for this duo and the next
     playing = []                                                         # the session of the duo now playing
@@ -84,7 +84,9 @@ def make_handler(generator):
                 print("duo: started")
                 inbox = queue.Queue()
                 threading.Thread(target=self.read, args=(inbox, first), daemon=True).start()
-                session, heard, played, shown = DuoSession(generator.model, generator.device, started=opened, **knobs), 0, 0, None
+                hands = {} if left is None else {'left': left}
+                session = DuoSession(generator.model, generator.device, started=opened, **hands, **knobs)
+                heard, played, shown = 0, 0, None
                 playing.append(session)
                 try:
                     while True:
@@ -106,8 +108,8 @@ def make_handler(generator):
                             if cut is not None:
                                 self.wfile.write(f"cut {cut:.3f}\n".encode())
                         elif session.ahead() < LOOKAHEAD:
-                            onset, duration, pitch = session.play()
-                            self.wfile.write(f"note {onset:.3f} {duration:.3f} {pitch}\n".encode())
+                            onset, duration, pitch, hand = session.play()
+                            self.wfile.write(f"note {onset:.3f} {duration:.3f} {pitch} {hand}\n".encode())
                             played += 1
                 except (BrokenPipeError, ConnectionResetError):
                     pass
@@ -140,7 +142,9 @@ if __name__ == '__main__':
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--model', default=None, help='Hugging Face name or local path of the AMT model')
+    parser.add_argument('--left', type=int, default=None,
+                        help='the General MIDI program its left hand is in the context (default: duo.LEFT, a bass)')
     args = parser.parse_args()
     generator = AMTGenerator(model_name=args.model)
     print(f"AMT model loaded on {generator.device}, listening on {args.host}:{args.port}")
-    Server((args.host, args.port), make_handler(generator)).serve_forever()
+    Server((args.host, args.port), make_handler(generator, args.left)).serve_forever()

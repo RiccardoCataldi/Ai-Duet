@@ -1,6 +1,10 @@
 import os
+import random
 import sys
+import tempfile
 import unittest
+
+import mido
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import main
@@ -51,6 +55,55 @@ class DuoTest(unittest.TestCase):
         for now in (102.0, 102.5, 103.0):
             self.duo.tick(now)
         self.assertEqual(self.out.generated_on(), [60])
+
+    def generated_velocities(self):
+        return {m[1]: m[2] for m, generated in self.out.messages if generated and m[0] == 0x90}
+
+    def test_the_pedal_holds_your_notes_until_it_comes_up_and_is_saved(self):
+        self.duo.sustain(127, 100.5)
+        self.duo.note_on(60, 90, 101.0)
+        self.duo.note_off(60, 101.2)
+        self.assertEqual(self.duo.notes, [])
+        self.duo.sustain(0, 102.0)
+        self.assertEqual(self.duo.notes, [(101.0, 102.0, 60, 90, False)])
+        self.duo.note_on(62, 90, 103.0)
+        self.duo.note_off(62, 103.1)
+        self.assertEqual(self.duo.notes[-1][:2], (103.0, 103.1))
+        path = os.path.join(tempfile.mkdtemp(), 'duo.mid')
+        self.duo.save(path)
+        pedal = [m.value for m in mido.MidiFile(path) if m.type == 'control_change' and m.control == main.PEDAL]
+        self.assertEqual(pedal, [0])   # the pedal down came before your first note, where the duo starts
+
+    def test_its_top_voice_sings_over_its_inner_voices_and_its_left_hand(self):
+        self.duo = main.Duo(self.sent.append, self.out, started=100.0, rng=random.Random(0))
+        main_human, main.HUMAN = main.HUMAN, 0
+        try:
+            for line in ("note 2.000 0.500 60 right\n", "note 2.000 0.500 67 right\n", "note 2.000 0.500 43 left\n"):
+                self.duo.receive(line)
+            self.duo.tick(102.0)
+        finally:
+            main.HUMAN = main_human
+        velocity = self.generated_velocities()
+        self.assertGreater(velocity[67], velocity[60])
+        self.assertGreater(velocity[67], velocity[43])
+
+    def test_it_plays_louder_when_you_do(self):
+        levels = []
+        for loud in (40, 120):
+            out = Out()
+            duo = main.Duo(self.sent.append, out, started=100.0, rng=random.Random(0))
+            for i in range(6):
+                duo.note_on(60, loud, 100.0 + i * 0.1)
+            duo.receive("note 5.000 0.500 64\n")
+            duo.tick(105.0)
+            levels.append([m[2] for m, generated in out.messages if generated][0])
+        self.assertGreater(levels[1], levels[0] + 30)
+
+    def test_its_line_swells_as_it_rises(self):
+        line = [60, 62, 64, 65, 67, 69, 71, 72]
+        low = main.dynamics(60, 'right', [60], line, 80, False, random.Random(0))
+        high = main.dynamics(72, 'right', [72], line, 80, False, random.Random(0))
+        self.assertGreater(high, low)
 
     def test_a_note_that_arrives_too_late_is_skipped(self):
         self.duo.receive("note 2.000 0.200 60\n")

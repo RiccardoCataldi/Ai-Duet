@@ -1,4 +1,5 @@
 import os
+import random
 import signal
 import socket
 import statistics
@@ -16,12 +17,36 @@ from CK_rec.rec_classes import CK_rec
 LATE_S = 0.15            # a note of the model that arrives later than this is skipped, not played out of time
 GUESS_S = 0.3            # how long we guess your note will last before you have played any
 INPUT_PROGRAM = 0        # Acoustic Grand Piano
-GENERATED_PROGRAM = 4    # Electric Piano 1
-# the model's sound: a warm, sustained electric piano in a big room
-GENERATED_CONTROLS = ((7, 100), (91, 115), (93, 60))  # volume, reverb send, chorus send
-SOFTER = 0.8             # the model plays a little softer than you: a darker, warmer electric piano
+GENERATED_PROGRAM = 0    # Acoustic Grand Piano too: a duo of two pianos, you on the left and the model on the right
+INPUT_CONTROLS = ((10, 40),)                                  # pan
+GENERATED_CONTROLS = ((7, 100), (10, 88), (91, 70), (93, 0))  # volume, pan, reverb send, chorus send
+PEDAL = 64               # the sustain pedal's control
 RING = 1.6               # its notes ring this much longer than the model wrote them, as if with a light pedal
 RING_S = 0.4             # and at least this many seconds more
+# its dynamics, shaped as a pianist shapes them; it follows how loud you play (LEVEL: how much your last note counts)
+LEVEL = 0.3
+SOFTER = 0.8             # it plays a little softer than you
+ACCOMPANY = 0.85         # and softer still while you play
+LEFT_HAND = 0.85         # its left hand under its right
+TOP, INNER = 1.08, 0.82  # in a chord the top voice sings and the inner voices fall back
+CONTOUR = 0.2            # its line swells as it rises and falls back as it descends: this much from lowest to highest
+CONTOUR_NOTES = 16       # its last notes the contour is measured against
+HUMAN = 4                # velocity a little different every time, as a hand never strikes twice the same
+
+
+def dynamics(pitch, hand, together, line, level, accompanying, rng=random):
+    """The velocity of one of the model's notes. `together`: the pitches its right hand starts with it,
+    `line`: its right hand's last pitches, `level`: how loud you play, `accompanying`: whether you are playing."""
+    velocity = level * SOFTER * (ACCOMPANY if accompanying else 1)
+    if hand == 'left':
+        velocity *= LEFT_HAND
+    elif len(together) > 1:
+        velocity *= TOP if pitch == max(together) else INNER
+    if hand != 'left' and len(line) >= 4 and max(line) > min(line):
+        height = min(max((pitch - min(line)) / (max(line) - min(line)), 0), 1)
+        velocity *= 1 + CONTOUR * (height - 0.5)
+    velocity += rng.uniform(-HUMAN, HUMAN)
+    return min(max(round(velocity), 1), 127)
 
 
 class Duo:
@@ -31,22 +56,30 @@ class Duo:
     `send` takes one protocol line (see music_transformer/server.py); `started` is when the connection opened.
     """
 
-    def __init__(self, send, midi_rec, started):
+    def __init__(self, send, midi_rec, started, rng=random):
         self.send = send
         self.midi_rec = midi_rec
         self.started = started
+        self.rng = rng
         self.lock = threading.Lock()
         self.notes = []                # (onset, offset, pitch, velocity, generated) in time.monotonic() seconds
-        self.held = {}                 # pitch -> (onset, velocity)
+        self.held = {}                 # pitch -> (onset, velocity), the keys you hold down
+        self.pedaled = {}              # pitch -> (onset, velocity), the keys you let go that the pedal holds
+        self.pedal = False
+        self.pedalings = []            # (time, value) of your sustain pedal
         self.durations = deque(maxlen=16)
-        self.velocity = 80
-        self.pending = []              # the model's notes not started yet: (onset, duration, pitch)
-        self.sounding = {}             # pitch -> (onset, offset) of the model's notes
+        self.level = 80                # how loud you play
+        self.played_at = None          # when you last pressed a key
+        self.pending = []              # the model's notes not started yet: (onset, duration, pitch, hand)
+        self.sounding = {}             # pitch -> (onset, offset, velocity) of the model's notes
+        self.line = deque(maxlen=CONTOUR_NOTES)   # its right hand's last pitches
 
     def note_on(self, pitch, velocity, now):
         with self.lock:
+            self._sounded(pitch, now)   # a key the pedal still holds, struck again
             self.held[pitch] = (now, velocity)
-            self.velocity = velocity
+            self.level += LEVEL * (velocity - self.level)
+            self.played_at = now
             guess = statistics.median(self.durations) if self.durations else GUESS_S
         self.send(f"on {now - self.started:.3f} {guess:.3f} {pitch}\n")
 
@@ -54,16 +87,32 @@ class Duo:
         with self.lock:
             if pitch not in self.held:
                 return
-            onset, velocity = self.held.pop(pitch)
-            self.durations.append(now - onset)
+            self.pedaled[pitch] = self.held.pop(pitch)
+            if not self.pedal:
+                self._sounded(pitch, now)
+
+    def sustain(self, value, now):
+        """Your sustain pedal: while it is down, the keys you let go ring on until it comes up."""
+        with self.lock:
+            self.pedalings.append((now, value))
+            self.pedal = value >= 64
+            if not self.pedal:
+                for pitch in list(self.pedaled):
+                    self._sounded(pitch, now)
+
+    def _sounded(self, pitch, now):
+        """Your note on `pitch`, held by the pedal, has stopped sounding at `now`."""
+        if pitch in self.pedaled:
+            onset, velocity = self.pedaled.pop(pitch)
+            self.durations.append(now - onset)   # how long your notes sound, the pedal's ring and all
             self.notes.append((onset, now, pitch, velocity, False))
 
     def receive(self, line):
         kind, *values = line.split()
         with self.lock:
             if kind == 'note':
-                onset, duration, pitch = values
-                self.pending.append((self.started + float(onset), float(duration), int(pitch)))
+                onset, duration, pitch, *hand = values
+                self.pending.append((self.started + float(onset), float(duration), int(pitch), (hand or ['right'])[0]))
             elif kind == 'cut':
                 cut = self.started + float(values[0])
                 self.pending = [n for n in self.pending if n[0] < cut]
@@ -71,32 +120,36 @@ class Duo:
     def tick(self, now):
         """Starts and stops the model's notes that are due."""
         with self.lock:
-            for pitch, (onset, offset) in list(self.sounding.items()):
+            for pitch, (onset, offset, _) in list(self.sounding.items()):
                 if offset <= now:
                     self._release(pitch, now)
             due = [n for n in self.pending if n[0] <= now]
             self.pending = [n for n in self.pending if n[0] > now]
-            for onset, duration, pitch in sorted(due):
+            accompanying = self.played_at is not None and now - self.played_at < 1.0
+            for onset, duration, pitch, hand in sorted(due):
                 if now - onset > LATE_S:
                     continue
                 if pitch in self.sounding:
                     self._release(pitch, now)
-                self.midi_rec.play_midi_message([0x90, pitch, self._velocity()], is_generated=True)
-                self.sounding[pitch] = (now, now + max(duration * RING, duration + RING_S))
+                together = [n[2] for n in due if n[0] == onset and n[3] == hand]
+                velocity = dynamics(pitch, hand, together, self.line, self.level, accompanying, self.rng)
+                if hand != 'left':
+                    self.line.append(pitch)
+                self.midi_rec.play_midi_message([0x90, pitch, velocity], is_generated=True)
+                self.sounding[pitch] = (now, now + max(duration * RING, duration + RING_S), velocity)
 
     def stop(self, now):
         with self.lock:
             self.pending = []
+            for pitch in list(self.pedaled):
+                self._sounded(pitch, now)
             for pitch in list(self.sounding):
                 self._release(pitch, now)
 
     def _release(self, pitch, now):
-        onset, _ = self.sounding.pop(pitch)
+        onset, _, velocity = self.sounding.pop(pitch)
         self.midi_rec.play_midi_message([0x80, pitch, 0], is_generated=True)
-        self.notes.append((onset, now, pitch, self._velocity(), True))
-
-    def _velocity(self):
-        return max(1, round(self.velocity * SOFTER))
+        self.notes.append((onset, now, pitch, velocity, True))
 
     def save(self, path):
         if not self.notes:
@@ -111,11 +164,17 @@ class Duo:
                     messages.append((onset - origin, 'note_on', pitch, velocity))
                     messages.append((offset - origin, 'note_off', pitch, 0))
             track = mido.MidiTrack([mido.Message('program_change', channel=channel, program=program)])
-            if generated:
-                track += [mido.Message('control_change', channel=channel, control=c, value=v) for c, v in GENERATED_CONTROLS]
+            track += [mido.Message('control_change', channel=channel, control=c, value=v)
+                      for c, v in (GENERATED_CONTROLS if generated else INPUT_CONTROLS)]
+            if not generated:
+                messages += [(at - origin, 'pedal', PEDAL, value) for at, value in self.pedalings if at >= origin]
             last = 0
             for at, kind, pitch, velocity in sorted(messages):
-                track.append(mido.Message(kind, channel=channel, note=pitch, velocity=velocity, time=ticks(at) - last))
+                if kind == 'pedal':
+                    track.append(mido.Message('control_change', channel=channel, control=pitch, value=velocity,
+                                              time=ticks(at) - last))
+                else:
+                    track.append(mido.Message(kind, channel=channel, note=pitch, velocity=velocity, time=ticks(at) - last))
                 last = ticks(at)
             mid.tracks.append(track)
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -141,8 +200,9 @@ if __name__ == "__main__":
     midiRec = CK_rec(myPort, 0x90, debug=False)
     midiRec.set_input_instrument(INPUT_PROGRAM)
     midiRec.set_generated_instrument(GENERATED_PROGRAM)
-    for control, value in GENERATED_CONTROLS:
-        midiRec.play_midi_message([0xB0 | midiRec.generated_channel, control, value])
+    for channel, controls in ((midiRec.input_channel, INPUT_CONTROLS), (midiRec.generated_channel, GENERATED_CONTROLS)):
+        for control, value in controls:
+            midiRec.play_midi_message([0xB0 | channel, control, value])
     sock, started = connect(os.environ.get('AMT_SERVER', 'localhost:8765'))
     duo = Duo(lambda line: sock.sendall(line.encode()), midiRec, started)
 
@@ -164,6 +224,9 @@ if __name__ == "__main__":
         elif kind in (0x80, 0x90):
             midiRec.play_midi_message(message)
             duo.note_off(pitch, time.monotonic())
+        elif kind == 0xB0 and pitch == PEDAL:   # your sustain pedal, on your channel
+            midiRec.play_midi_message([0xB0 | midiRec.input_channel, PEDAL, velocity])
+            duo.sustain(velocity, time.monotonic())
 
     codeK.set_callback(on_midi)
     # run_duet.sh starts us in the background, where SIGINT is ignored: stop and save on SIGINT or SIGTERM anyway

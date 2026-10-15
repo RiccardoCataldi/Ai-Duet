@@ -10,7 +10,8 @@ An interactive AI music generation system that responds to MIDI keyboard input i
 
 - Real-time MIDI input processing
 - AI-powered music generation based on your playing
-- A real-time duo: the model improvises on electric piano while you play. It listens like a partner: it follows your key and your modulations, leans on the chord you play, keeps to your pulse, stays under you while you play and answers your phrases when you rest
+- A real-time duo of two pianos: the model improvises with two hands of its own while you play. It listens like a partner: it follows your key and your modulations, hears the jazz chord you play (maj7, m7b5, sus, 6 told apart by the bass) and colours it with its 9th, 11th and 13th, keeps to your pulse, stays under you while you play and answers your phrases when you rest
+- It plays with dynamics, as a pianist does: as loud as you play, softer while it accompanies you, its top voice singing over its inner voices and its left hand; and your sustain pedal sounds and is heard
 - Different instruments for input and generated music
 - MIDI file saving and playback capabilities
 
@@ -42,8 +43,8 @@ At the top it says what the model hears and does: your key, the chord you play, 
 
   | Control | From ... to | Turns |
   |---|---|---|
-  | density | sparse ... dense | `min_step`, `space` |
-  | harmony | inside ... outside | `out_of_key`, `chord_tone` |
+  | density | sparse ... dense | `min_step`, `space`, `max_rest` |
+  | harmony | inside ... outside | `out_of_key`, `chord_tone`, `tension` |
   | role | accompanies ... leads (while you play) | `under` |
   | dialogue | ignores you ... answers you (when your phrase ends) | `answer`, `echo` |
   | groove | loose ... tight | `grid` |
@@ -52,7 +53,7 @@ At the top it says what the model hears and does: your key, the chord you play, 
   | key follow | steady ... quick | `stay` |
 
   and `lowest`, `highest`: the octaves it may play. The model's knobs are kept in `~/.config/ai-duet/mind.json` and given back to the server whenever it restarts; the server log shows each turn (`duo: min_step = 32`).
-- **Your sound** and **AI sound** (`sound.py`, in FluidSynth on the laptop): the General MIDI instrument, volume, the envelope (attack, decay, sustain and release, as how many times longer than the instrument's own, through SoundFont NRPNs), the reverb send, and a delay: its time, how loud the first echo is (0 turns it off) and how much each echo keeps of the one before. FluidSynth has no delay, so the echoes are MIDI notes, played on channels 2 (yours) and 3 (the model's). The sound is kept in `~/.config/ai-duet/sound.json` across sessions.
+- **Your sound** and **AI sound** (`sound.py`, in FluidSynth on the laptop): the General MIDI instrument, volume, where it sits from left to right (pan: you on the left, the model on the right, as two pianos on a record), the envelope (attack, decay, sustain and release, as how many times longer than the instrument's own, through SoundFont NRPNs), the reverb send, and a delay: its time, how loud the first echo is (0 turns it off) and how much each echo keeps of the one before. FluidSynth has no delay, so the echoes are MIDI notes, played on channels 2 (yours) and 3 (the model's). The sound is kept in `~/.config/ai-duet/sound.json` across sessions.
 - **Advanced**: every knob of the model on its own (see *Tuning by ear* below).
 
 ## Requirements
@@ -92,7 +93,7 @@ python main.py
 ```
 
 3. Select your MIDI input device when prompted
-4. Start playing on your MIDI keyboard: you play piano, the model plays electric piano at the same time
+4. Start playing on your MIDI keyboard: you play piano, the model plays a second piano at the same time
 5. Press Ctrl+C to stop the program and save the duo to `generated/`
 
 ## Duo on a Jetson
@@ -105,7 +106,7 @@ The model runs on a Jetson Orin Nano (JetPack 6) and the laptop handles MIDI and
 - Power mode MAXN_SUPER (it persists across reboots)
 - `ssh jetson` works from the laptop with a key
 
-**On the laptop, once:** FluidSynth with the `FluidR3_GM` soundfont, and the venv `.venv` of this repo with `pip install mido python-rtmidi pygame imageio-ffmpeg` (imageio-ffmpeg brings its own ffmpeg, for the videos).
+**On the laptop, once:** FluidSynth with the `FluidR3_GM` soundfont (or, much closer to a real grand, a sampled piano such as the Salamander Grand Piano in SF2: `SOUNDFONT=path/to/it.sf2 ./run_duet.sh`), and the venv `.venv` of this repo with `pip install mido python-rtmidi pygame imageio-ffmpeg` (imageio-ffmpeg brings its own ffmpeg, for the videos).
 
 **Every time the Jetson boots:**
 ```bash
@@ -119,13 +120,17 @@ ssh -t jetson sudo jetson_clocks   # the clocks go back to defaults after every 
 
 **Changing the code on the Jetson:** it does not pull from git; copy the files over, e.g.
 `scp music_transformer/duo.py jetson:~/Ai-Duet/music_transformer/`, then run `./run_duet.sh` again.
+The server now says which hand plays each note (`note <onset> <duration> <pitch> <hand>`): copy `music_transformer/` to the Jetson whenever you update `main.py` on the laptop.
 The session tests need torch, so run them there: `python -m unittest tests.test_duo_session`.
 
-**The model's sound** (top of `main.py`): `RING`, `RING_S` (how long its notes ring past what the model wrote), `SOFTER` (how much softer than you it plays), `GENERATED_CONTROLS` (volume, reverb and chorus sends, until the piano roll sets its own); the room itself is `REVERB` and `CHORUS` in `run_duet.sh`; the rest is in the **Your sound** and **AI sound** knobs.
+**The model's sound** (top of `main.py`): `RING`, `RING_S` (how long its notes ring past what the model wrote), its dynamics (`SOFTER`: how much softer than you it plays, `ACCOMPANY`: softer still while you play, `LEFT_HAND`, `TOP` and `INNER`: its left hand and its inner voices under its top voice, `CONTOUR`: how much its line swells as it rises, `HUMAN`: how much each velocity varies), `GENERATED_CONTROLS` (volume, pan, reverb and chorus sends, until the piano roll sets its own); a sound saved before the duo became two pianos keeps its electric piano: double-click the **AI sound** knobs to put them back; the room itself is `REVERB` and `CHORUS` in `run_duet.sh`; the rest is in the **Your sound** and **AI sound** knobs.
 
 **Tuning by ear:** turn the knobs in the **Advanced** tab of the piano roll while you play (they are `KNOBS` in `music_transformer/duo.py`, with their ranges); to change a default, edit it at the top of `music_transformer/duo.py`:
 - `MIN_STEP`, `SPACE`: time between the model's onsets, when you rest and while you play
 - `OUT_OF_KEY`, `CHORD_TONE`: how strongly it keeps to your key and leans on the chord you are playing
+- `TENSION`: how much it colours your chord with its tensions (`TENSIONS` in `music_transformer/listener.py`: the 9th, #11 and 13th of a major seventh...); a tension is never taken away as out of key
+- `HANDS` (the `hands` knob): one hand, or its line over a left hand of its own. The left hand is another instrument in the model's context (`LEFT`, a bass, or `--left` on the server), so the model hears two parts; it keeps under `LEFT_TOP` and the right hand over `RIGHT_BOTTOM`, with its own rhythm (`LEFT_STEP`) and chords of up to `LEFT_CHORD` notes. Both sound as the model's piano
+- `MAX_REST`: the longest silence it may leave (longer lets it lay out, as a partner does)
 - `UNDER`: how firmly it stays below you while you play
 - `ANSWER`, `ECHO`: how long after your phrase it answers it, and how closely it follows your intervals
 - `GRID`: how tightly its onsets sit on your pulse
