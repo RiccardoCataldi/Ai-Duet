@@ -54,7 +54,7 @@ At the top it says what the model hears and does: your key, the chord you play, 
 
   and `lowest`, `highest`: the octaves it may play. The model's knobs are kept in `~/.config/ai-duet/mind.json` and given back to the server whenever it restarts; the server log shows each turn (`duo: min_step = 32`).
 - **Your sound** and **AI sound** (`sound.py`, in FluidSynth on the laptop): the General MIDI instrument, volume, where it sits from left to right (pan: you on the left, the model on the right, as two pianos on a record), the envelope (attack, decay, sustain and release, as how many times longer than the instrument's own, through SoundFont NRPNs), the reverb send, and a delay: its time, how loud the first echo is (0 turns it off) and how much each echo keeps of the one before. FluidSynth has no delay, so the echoes are MIDI notes, played on channels 2 (yours) and 3 (the model's). The sound is kept in `~/.config/ai-duet/sound.json` across sessions.
-- **Advanced**: every knob of the model on its own (see *Tuning by ear* below).
+- **Advanced**: every knob of the model on its own (see *Tuning by ear* below; with Aria, its own knobs, see *Duo with Aria*).
 
 ## Requirements
 
@@ -82,7 +82,7 @@ The project requires several Python packages listed in `requirements.txt`. See t
 
 3. Connect your MIDI keyboard/controller to your computer
 4. Make sure you have a MIDI output device configured
-5. The AI uses the pretrained [Anticipatory Music Transformer](https://github.com/jthickstun/anticipation) (trained on the Lakh MIDI dataset). It is downloaded from Hugging Face on first run: `music-medium-800k` on GPU/Apple Silicon, `music-small-800k` on CPU
+5. The AI uses the pretrained [Anticipatory Music Transformer](https://github.com/jthickstun/anticipation) (trained on the Lakh MIDI dataset). It is downloaded from Hugging Face on first run: `music-medium-800k` on GPU/Apple Silicon, `music-small-800k` on CPU. On an NVIDIA GPU it can be [Aria](#duo-with-aria-on-a-pc-with-a-gpu) instead, a model of expressive piano
 
 ## Usage
 
@@ -139,6 +139,30 @@ The session tests need torch, so run them there: `python -m unittest tests.test_
 - `MEMORY`: how much of its own playing it remembers (shorter = listens to you more)
 - `temperature` and `top_p` in `DuoSession`: how adventurous its choices are
 - `lowest`, `highest` (knobs only, in `KNOBS`): the octaves it may play, from C of the lowest to B of the highest (C4 is middle C); the piano roll draws them as a line over the keys
+
+## Duo with Aria on a PC with a GPU
+
+[Aria](https://github.com/EleutherAI/aria) (EleutherAI) is a model of expressive solo piano: about 1B parameters, trained on ~60k hours of piano recordings transcribed to MIDI. Where AMT plays one line and leaves the dynamics to `main.py`, Aria plays both its hands and says how hard it strikes each key; it hears your notes and its own as one performance, four hands on one keyboard, and is told the music is jazz (`--genre`). It needs an NVIDIA GPU with ~4 GB free (an RTX 3080 Ti is plenty); the Jetson Orin Nano is too slow for it.
+
+**On the PC, once** (Python 3.11+, the repo in `~/Ai-Duet`, `ssh pc` working from the laptop with a key):
+```bash
+cd ~/Ai-Duet && python3 -m venv .venv && . .venv/bin/activate
+pip install torch safetensors numpy                               # torch with CUDA
+pip install git+https://github.com/EleutherAI/aria-utils.git
+git clone https://github.com/EleutherAI/aria ~/aria && pip install --no-deps -e ~/aria   # --no-deps: mlx is for Macs
+mkdir -p ~/models && wget -O ~/models/aria-medium-gen.safetensors \
+  https://huggingface.co/loubb/aria-medium-gen/resolve/main/model.safetensors
+```
+
+**Every time:** from the laptop,
+```bash
+DUET_HOST=pc SERVER_ARGS="--engine aria --checkpoint ~/models/aria-medium-gen.safetensors" ./run_duet.sh
+```
+Over a VPN, the network's delay adds to the model's: the model plays `LOOKAHEAD` (1 s) ahead and a new note of its sounds no sooner than `MARGIN` (150 ms); if `ping pc` is above ~60 ms or jumps around, raise `MARGIN` in `music_transformer/aria_duo.py` and `LATE_S` in `main.py`.
+
+**Its knobs** (`KNOBS` in `music_transformer/aria_duo.py`, in the **Advanced** tab): Aria is a pianist already, so they nudge it less than AMT's and there are no rules against loops: `chord` (most notes it starts at once), `space` and `min_step` (time between its onsets while you play and when you rest), `out_of_key`, `chord_tone`, `tension`, `under`, `grid` (at its highest, 20, its own expressive timing), `max_rest`, `temperature` and `min_p` (how adventurous, as Aria's authors sample it), `lowest` and `highest`. The **AI mind** controls turn those it has.
+
+**Its tests** need torch and aria-utils, not the model: `python -m unittest tests.test_aria_duo`.
 
 ## Instrument Selection
 

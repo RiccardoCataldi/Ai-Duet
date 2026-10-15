@@ -47,6 +47,14 @@ MACROS = [
     ('key follow', ('steady', 'quick'), "how soon it follows you into a new key",
      {'stay': (0.995, 0.97, 0.85)}),
 ]
+# the same controls for Aria (music_transformer/aria_duo.py), whose knobs have other defaults and ranges
+ENGINE_TURNS = {'aria': {
+    'density': {'min_step': (40, 0, 0), 'space': (100, 15, 0), 'max_rest': (600, 300, 100)},
+    'harmony': {'out_of_key': (3.0, 0.5, 0.0), 'chord_tone': (2.0, 0.5, 0.0), 'tension': (0.0, 0.5, 2.0)},
+    'role': {'under': (2.0, 0.5, 0.0)},
+    'groove': {'grid': (20, 20, 3)},
+    'risk': {'temperature': (0.7, 0.95, 1.3), 'min_p': (0.1, 0.035, 0.0)},
+}}
 MODES = {'listening': 'waiting for you to play', 'accompanying': 'accompanying you', 'answering': 'answering you',
          'alone': 'playing on its own'}
 
@@ -129,6 +137,7 @@ class Mind:
     def __init__(self, address, path=MIND_FILE):
         self.address, self.path = address, path
         self.knobs = {}           # name -> Knob, once connected
+        self.engine = 'amt'       # the model the server plays: each keeps its own knobs
         self.state = None         # the last DuoSession.state() heard
         self.sock = None
         self.lock = threading.Lock()
@@ -137,11 +146,9 @@ class Mind:
                 self.saved = json.load(f)
         except (OSError, ValueError):
             self.saved = {}
-        self.saved.setdefault('knobs', {})
-        self.saved.setdefault('macros', {})
-        self.macros = [Knob(label, self.saved['macros'].get(label, 0.5), 0, 1, 0.5, 'macro', what, False,
-                            self._macro, ends) for label, ends, what, _ in MACROS]
-        self.turns = {label: turns for label, _, _, turns in MACROS}
+        self.macros = [Knob(label, 0.5, 0, 1, 0.5, 'macro', what, False, self._macro, ends)
+                       for label, ends, what, _ in MACROS]
+        self._play('amt')
         if address:
             threading.Thread(target=self._connect, daemon=True).start()
 
@@ -156,13 +163,16 @@ class Mind:
                 for line in lines:
                     if line.strip() == 'ready':
                         break
+                    if line.startswith('engine '):
+                        self._play(line.split()[1])
+                        continue
                     _, name, value, low, high, default, unit, what = line.split(maxsplit=7)
                     knobs[name] = Knob(name, value, low, high, default, unit.strip('-'), what.strip(),
                                        '.' not in default, self.send)
                 sock.settimeout(None)
                 with self.lock:
                     self.knobs, self.sock = knobs, sock
-                for name, value in self.saved['knobs'].items():   # as you left them
+                for name, value in self._saved('knobs').items():   # as you left them
                     if name in knobs:
                         knobs[name].value = value
                         self.send(knobs[name])
@@ -184,15 +194,26 @@ class Mind:
             sock.sendall(f"set {knob.name} {knob.value:.4f}\n".encode())
         except OSError:
             return
-        self.saved['knobs'][knob.name] = knob.value
+        self._saved('knobs')[knob.name] = knob.value
         self._save()
 
     def _macro(self, macro):
         for name, anchors in self.turns[macro.name].items():
             if name in self.knobs:
                 self.knobs[name].set(along(anchors, macro.value))
-        self.saved['macros'][macro.name] = macro.value
+        self._saved('macros')[macro.name] = macro.value
         self._save()
+
+    def _play(self, engine):
+        """The server plays `engine`: its controls, and its knobs and controls as you left them."""
+        self.engine = engine
+        self.turns = {label: ENGINE_TURNS.get(engine, {}).get(label, turns) for label, _, _, turns in MACROS}
+        for macro in self.macros:
+            macro.value = self._saved('macros').get(macro.name, 0.5)
+
+    def _saved(self, what):
+        """What you left turned for this engine: 'knobs' or 'macros' (AMT's under those names, as it always was)."""
+        return self.saved.setdefault(what if self.engine == 'amt' else f"{what}_{self.engine}", {})
 
     def _save(self):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)

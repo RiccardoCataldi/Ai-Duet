@@ -1,0 +1,182 @@
+"""Needs torch and ariautils (pip install git+https://github.com/EleutherAI/aria-utils.git), not the model itself."""
+import os
+import sys
+import unittest
+
+import torch
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from music_transformer import aria_duo
+    from music_transformer.aria_duo import NOTE_IDS, SEGMENT, T, TOKENIZER, VELOCITIES, AriaSession
+except ImportError as e:   # ariautils is not installed here
+    aria_duo = None
+    MISSING = str(e)
+
+
+class UniformModel:
+    """Every token equally likely; checks it is always fed where its cache ends."""
+
+    def __init__(self):
+        self.cached = 0
+
+    def __call__(self, tokens, start):
+        assert start <= self.cached, (start, self.cached)
+        self.cached = start + len(tokens)
+        return torch.zeros(TOKENIZER.vocab_size)
+
+
+class StuckModel(UniformModel):
+    """Always wants pitch 61, as loud as can be, at once."""
+
+    def __call__(self, tokens, start):
+        logits = super().__call__(tokens, start)
+        logits[NOTE_IDS[61, -1]] = 50
+        logits[T] = -50
+        return logits
+
+
+class Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+def replay(session):
+    """The notes Aria's tokens say, (tick, pitch, velocity, duration): they must be the session's events."""
+    tokens, notes, segment = TOKENIZER.decode(session.seq[len(session.prefix):]), [], 0
+    i = 0
+    while i < len(tokens):
+        if tokens[i] == TOKENIZER.time_tok:
+            segment += 1
+            i += 1
+            continue
+        (_, pitch, velocity), (_, onset), (_, duration) = tokens[i:i + 3]
+        notes.append((segment * SEGMENT + onset // 10, pitch, velocity, duration // 10))
+        i += 3
+    return notes
+
+
+@unittest.skipIf(aria_duo is None, "ariautils is not installed")
+class AriaSessionTest(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(0)
+        self.clock, self.model = Clock(), UniformModel()
+        self.session = AriaSession(self.model, clock=self.clock)
+
+    def fill(self):
+        notes = []
+        while self.session.ahead() < aria_duo.LOOKAHEAD:
+            notes.append(self.session.play())
+        return notes
+
+    def follow(self, count):
+        notes = []
+        for _ in range(count):
+            notes.append(self.session.play())
+            self.clock.t = notes[-1][0]
+        return notes
+
+    def events(self):
+        return [(tick, pitch, velocity, duration) for tick, _, pitch, velocity, duration in self.session.events]
+
+    def test_it_plays_after_now_in_order_without_long_rests_and_its_tokens_say_so(self):
+        self.clock.t = 3.0
+        self.session.hear(3.0, 0.3, 60, 90)
+        notes = self.fill()
+        onsets = [onset for onset, *_ in notes]
+        self.assertEqual(onsets, sorted(onsets))
+        self.assertGreaterEqual(onsets[0], 3.0 + aria_duo.MARGIN / 100 - 1e-9)
+        self.assertLessEqual(max(b - a for a, b in zip([3.0] + onsets, onsets)), self.session.max_rest / 100 + 1e-9)
+        self.assertTrue(all(velocity in VELOCITIES for *_, velocity in notes))
+        self.assertTrue(all(hand == ('left' if pitch < aria_duo.SPLIT else 'right') for _, _, pitch, hand, _ in notes))
+        self.assertEqual(replay(self.session), self.events())
+
+    def test_long_rests_cross_segments_and_your_note_drops_only_what_has_not_sounded(self):
+        self.session.turn(max_rest=800)
+        self.session.hear(0.0, 0.3, 60, 70)
+        self.follow(30)
+        self.assertGreater(self.session.segment, 0)
+        self.clock.t += 0.2
+        before = len(self.session.events)
+        cut = self.session.hear(self.clock.t, 0.3, 64, 100)
+        mine = [e for e in self.session.events if e[1]]
+        self.assertTrue(all(e[0] <= self.session.now() + aria_duo.MARGIN for e in mine))
+        self.assertEqual(cut is None, len(self.session.events) == before + 1)
+        self.assertEqual(replay(self.session), self.events())
+        self.assertEqual(self.session.events[-1][2:4], (64, 100))
+        self.follow(10)
+        self.assertEqual(replay(self.session), self.events())
+
+    def test_it_never_doubles_a_key_nor_starts_more_than_its_chord_at_once(self):
+        session = AriaSession(StuckModel(), clock=self.clock, chord=2, min_step=20, space=20)
+        session.hear(0.0, 0.3, 60, 80)
+        notes = [session.play() for _ in range(30)]
+        groups = []
+        for onset, _, pitch, *_ in notes:
+            if groups and onset - groups[-1][0] <= aria_duo.CHORD / 100 + 1e-9:
+                groups[-1][1].append(pitch)
+            else:
+                groups.append((onset, [pitch]))
+        for _, pitches in groups:
+            self.assertLessEqual(len(pitches), 2)
+            self.assertEqual(len(pitches), len(set(pitches)))
+        times = [onset for onset, _ in groups]
+        self.assertGreaterEqual(min(b - a for a, b in zip(times, times[1:])), 0.2 - 1e-9)
+
+    def test_it_plays_only_in_the_octaves_it_is_given(self):
+        self.session.turn(lowest=5, highest=4)
+        self.session.hear(0.0, 0.3, 30, 80)
+        self.assertTrue(all(60 <= pitch <= 83 for _, _, pitch, *_ in self.follow(60)))
+
+    def test_it_prefers_the_pitch_classes_you_are_playing(self):
+        self.session.turn(chord_tone=3.0)
+        for i, pitch in enumerate((60, 64, 67, 72)):
+            self.session.hear(i * 0.2, 0.2, pitch, 80)
+        self.clock.t = 0.6
+        notes = []
+        for _ in range(60):
+            notes.append(self.session.play())
+            self.clock.t = notes[-1][0]
+            self.session.hear(self.clock.t, 0.2, (60, 64, 67)[len(notes) % 3], 80)
+        in_chord = sum(pitch % 12 in (0, 4, 7) for _, _, pitch, *_ in notes) / len(notes)
+        self.assertGreater(in_chord, 0.4)   # 3 pitch classes of 12: 25% without ears
+
+    def test_a_full_context_keeps_the_last_moments_from_tick_zero_and_rebuilds_the_cache(self):
+        context = aria_duo.CONTEXT
+        aria_duo.CONTEXT = 300
+        try:
+            self.session.hear(0.0, 0.3, 60, 80)
+            longest = 0
+            for _ in range(200):
+                self.follow(1)
+                longest = max(longest, len(self.session.seq))
+            self.assertGreater(self.session.base, 0)
+            self.assertLessEqual(longest, 300)
+            self.assertEqual(self.session.events[0][0], 0)
+            self.assertEqual(replay(self.session), self.events())
+        finally:
+            aria_duo.CONTEXT = context
+
+    def test_it_says_what_it_does(self):
+        self.assertEqual(self.session.state()['mode'], 'listening')
+        for i, pitch in enumerate((55, 59, 62, 65)):
+            self.clock.t = i * 0.1
+            self.session.hear(self.clock.t, 1.0, pitch, 80)
+        self.clock.t = 0.35
+        state = self.session.state()
+        self.assertEqual((state['mode'], state['chord']), ('accompanying', 'G7'))
+        self.assertIn('under', state['active'])
+        self.clock.t = 5.0
+        self.assertEqual(self.session.state()['mode'], 'alone')
+
+    def test_knobs_hold_from_the_start_and_stay_within_their_range(self):
+        session = AriaSession(UniformModel(), clock=self.clock, min_p=2.0, genre=None)
+        self.assertEqual(session.knobs()['min_p'], 0.3)
+        self.assertEqual(TOKENIZER.decode(session.prefix), [('prefix', 'instrument', 'piano'), TOKENIZER.bos_tok])
+
+
+if __name__ == '__main__':
+    unittest.main()

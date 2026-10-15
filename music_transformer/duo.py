@@ -14,8 +14,9 @@ from anticipation.config import CONTEXT_SIZE, MAX_DUR, MAX_PITCH, MAX_TIME, TIME
 from anticipation.vocab import AUTOREGRESS, DUR_OFFSET, NOTE_OFFSET, TIME_OFFSET
 from anticipation.sample import safe_logits, nucleus
 
-from music_transformer.listener import STAY, TENSIONS, Listener
+from music_transformer.listener import STAY, Listener
 
+NAME = 'amt'
 LOOKAHEAD = 100   # ticks the model plays ahead of now (1 s)
 MARGIN = 15       # ticks: a new note of the model sounds no earlier than this, to cover sampling and the network
 MAX_REST = 200    # ticks: the longest silence the model may leave; it reads long silences as a sparse piece and stops
@@ -145,8 +146,8 @@ class DuoSession:
         """Ticks of music already sampled beyond now; the caller samples more while this is under LOOKAHEAD."""
         return self._last_time() - self.now()
 
-    def hear(self, onset, duration, pitch):
-        """Your note, pressed at `onset`. Returns the time from which the model's unplayed notes are dropped, or None."""
+    def hear(self, onset, duration, pitch, velocity=None):
+        """Your note, pressed at `onset` (AMT does not hear how hard). Returns the time from which the model's unplayed notes are dropped, or None."""
         self.listener.hear(onset, duration, pitch)
         tick = round(onset * TIME_RESOLUTION)
         if self.base is None:
@@ -244,13 +245,9 @@ class DuoSession:
     def _partner(self, tick, line):
         """Logits added to its pitches at `tick`: your chord and key; under you while you play; your phrase after it."""
         at, you_play = self._seconds(tick), tick - self.heard_at < PLAYING
-        in_key, harmony = self.listener.in_key(), self.listener.harmony(at)
-        chord = harmony[2] if harmony else set()
-        colours = {(harmony[0] + step) % 12 for step in TENSIONS[harmony[1]]} - chord if harmony else set()
-        # a tension is welcome even outside your key (the #11 of a major chord): it is not taken away as a wrong note
-        bias = torch.tensor([self.chord_tone * (p % 12 in chord) + self.tension * (p % 12 in colours)
-                             - self.out_of_key * (1 - in_key[p % 12]) * (p % 12 not in colours)
-                             for p in range(MAX_PITCH)], dtype=torch.float)
+        in_key = self.listener.in_key()
+        bias = torch.tensor(self.listener.bias(at, self.chord_tone, self.tension, self.out_of_key)[:MAX_PITCH],
+                            dtype=torch.float)
         if you_play:
             recent = at - PLAYING / TIME_RESOLUTION - 1
             low = min((n[2] for n in self.listener.notes if n[0] >= recent), default=MAX_PITCH)

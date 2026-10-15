@@ -53,6 +53,17 @@ class MindTest(unittest.TestCase):
         self.assertEqual(again.saved['knobs']['under'], 3.0)
         self.assertEqual(next(m for m in again.macros if m.name == 'role').value, 0.0)
 
+    def test_each_model_keeps_its_own_knobs_and_controls(self):
+        self.macro('role').set(0.0)
+        self.mind._play('aria')
+        self.assertEqual(self.macro('role').value, 0.5)   # Aria's as you left them: never turned
+        self.macro('role').set(0.0)
+        self.assertEqual(self.mind.knobs['under'].value, 2.0)   # along Aria's line, not AMT's
+        again = knobs.Mind(None, self.path)
+        self.assertEqual((again.saved['knobs']['under'], again.saved['knobs_aria']['under']), (3.0, 2.0))
+        again._play('aria')
+        self.assertEqual(next(m for m in again.macros if m.name == 'role').value, 0.0)
+
 
 class DummySocket:
     def sendall(self, data):

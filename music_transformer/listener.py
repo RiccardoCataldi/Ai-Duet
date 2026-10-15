@@ -123,6 +123,15 @@ class Listener:
         root, kind, tones = harmony
         return {(root + step) % 12 for step in TENSIONS[kind]} - tones
 
+    def bias(self, now, chord_tone, tension, out_of_key):
+        """For each of the 128 pitches, how much more a partner would play it now: the tones of your chord and its
+        tensions, less the pitches outside your key (a tension is not taken as one)."""
+        in_key, harmony = self.in_key(), self.harmony(now)
+        chord = harmony[2] if harmony else set()
+        colours = {(harmony[0] + step) % 12 for step in TENSIONS[harmony[1]]} - chord if harmony else set()
+        return np.array([chord_tone * (p % 12 in chord) + tension * (p % 12 in colours)
+                         - out_of_key * (1 - in_key[p % 12]) * (p % 12 not in colours) for p in range(128)])
+
     @staticmethod
     def chord_name(tones):
         """The name of a chord from chord(), e.g. G7."""

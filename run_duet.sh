@@ -1,7 +1,11 @@
 #!/bin/bash
-# Restart the duet: AMT server on the Jetson, SSH tunnel, FluidSynth, main.py and the piano roll on the laptop.
+# Restart the duet: the model's server on the Jetson (or another machine), SSH tunnel, FluidSynth, main.py and the
+# piano roll on the laptop. Aria on a PC with an NVIDIA GPU, for example:
+#   DUET_HOST=pc SERVER_ARGS="--engine aria --checkpoint ~/models/aria-medium-gen.safetensors" ./run_duet.sh
 cd "$(dirname "$0")"
 LOG=${LOG_DIR:-/tmp}
+HOST=${DUET_HOST:-jetson}                                            # an ssh host with this repo in ~/Ai-Duet
+SERVER_ARGS=${SERVER_ARGS:---model ~/models/music-medium-800k}       # AMT by default
 
 pkill -INT -f "^\.venv/bin/python main\.py"; sleep 2; pkill -f "^\.venv/bin/python main\.py"
 pkill -f "^\.venv/bin/python pianoroll\.py"
@@ -10,14 +14,14 @@ pkill -x fluidsynth
 pkill -f "^ssh -N .*-L 8765:localhost:8765"
 sleep 1
 
-ssh jetson 'pkill -f "^python -u -m music_transformer\.server"; sleep 2
+ssh "$HOST" 'pkill -f "^python -u -m music_transformer\.server"; sleep 2
   cd ~/Ai-Duet || exit 1
   . .venv/bin/activate
-  HF_HUB_OFFLINE=1 setsid nohup python -u -m music_transformer.server --model ~/models/music-medium-800k > ~/amt_server.log 2>&1 < /dev/null &
+  HF_HUB_OFFLINE=1 setsid nohup python -u -m music_transformer.server '"$SERVER_ARGS"' > ~/amt_server.log 2>&1 < /dev/null &
   for i in $(seq 60); do grep -q -E "listening|Traceback" ~/amt_server.log && break; sleep 2; done
   grep -E "listening|Traceback" ~/amt_server.log'
 
-setsid nohup ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 8765:localhost:8765 jetson > /dev/null 2>&1 < /dev/null &
+setsid nohup ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 8765:localhost:8765 "$HOST" > /dev/null 2>&1 < /dev/null &
 # small audio buffers (-z 128 -c 2) keep the keyboard responsive; a big, dark room and a slow chorus warm up the sound
 REVERB="-o synth.reverb.room-size=0.75 -o synth.reverb.damp=0.6 -o synth.reverb.width=1.0 -o synth.reverb.level=0.8"
 CHORUS="-o synth.chorus.depth=6 -o synth.chorus.speed=0.25 -o synth.chorus.level=1.5"

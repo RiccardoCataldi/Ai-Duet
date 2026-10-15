@@ -2,16 +2,19 @@
 Serve the duo over TCP so the model can run on another machine (e.g. a Jetson).
 
     python -m music_transformer.server            # listens on 127.0.0.1:8765
+    python -m music_transformer.server --engine aria --checkpoint aria-medium-gen.safetensors   # Aria, on CUDA
     ssh -N -L 8765:localhost:8765 jetson          # on the laptop, then AMT_SERVER=localhost:8765
 
 One line per message, times in seconds since the connection opened:
-    client -> server   "on <onset> <duration> <pitch>"   you pressed a key (the duration is a guess)
-    server -> client   "note <onset> <duration> <pitch> <hand>"   the model's next note, of its left or right hand
+    client -> server   "on <onset> <duration> <pitch> <velocity>"   you pressed a key (the duration is a guess)
+    server -> client   "note <onset> <duration> <pitch> <hand> [<velocity>]"   the model's next note, of its left or
+                                                      right hand; Aria says how hard, AMT leaves it to the client
     server -> client   "cut <onset>"                     forget the model's notes from <onset> on: they are resampled
 One duo at a time; a second connection waits for the first to close.
 
-A connection that starts with "knobs" turns the duo's knobs (duo.KNOBS) instead, while a duo plays or before:
-    server -> client   "knob <name> <value> <lowest> <highest> <default> <unit> <what it does>"   one per knob, then "ready"
+A connection that starts with "knobs" turns the duo's knobs (the engine's KNOBS) instead, while a duo plays or before:
+    server -> client   "engine <amt or aria>", then
+                       "knob <name> <value> <lowest> <highest> <default> <unit> <what it does>"   one per knob, then "ready"
     client -> server   "set <name> <value>"              from the model's next note on, and for the next duos
     server -> client   "state <json>"                    four times a second: DuoSession.state(), what it hears and does
 """
@@ -24,15 +27,34 @@ import socketserver
 import threading
 import time
 
-from anticipation.config import TIME_RESOLUTION
-
-from music_transformer.amt import AMTGenerator
-from music_transformer.duo import ALWAYS, KNOBS, LOOKAHEAD, DuoSession, knob
+from types import SimpleNamespace
 
 STATE_S = 0.25    # how often a knobs connection hears what the duo is doing
 
 
-def make_handler(generator, left=None):
+def amt(model=None, left=None):
+    """The duo with the Anticipatory Music Transformer (duo.py)."""
+    from music_transformer import duo
+    from music_transformer.amt import AMTGenerator
+    generator = AMTGenerator(model_name=model)
+    hands = {} if left is None else {'left': left}
+    print(f"AMT model loaded on {generator.device}")
+    return SimpleNamespace(engine=duo, session=lambda **kw: duo.DuoSession(generator.model, generator.device,
+                                                                           **hands, **kw))
+
+
+def aria(checkpoint, genre='jazz'):
+    """The duo with Aria (aria_duo.py)."""
+    from music_transformer import aria_duo
+    model = aria_duo.AriaModel(checkpoint)
+    print(f"Aria loaded on {model.device} from {checkpoint}")
+    return SimpleNamespace(engine=aria_duo, session=lambda **kw: aria_duo.AriaSession(model, genre=genre, **kw))
+
+
+def make_handler(player):
+    """`player`: its `engine` module (KNOBS, ALWAYS, knob, LOOKAHEAD) and `session(started, **knobs)`."""
+    engine = player.engine
+    KNOBS, ALWAYS, LOOKAHEAD, knob = engine.KNOBS, engine.ALWAYS, engine.LOOKAHEAD, engine.knob
     lock = threading.Lock()
     knobs = {name: default for name, (default, *_) in KNOBS.items()}   # as last turned, for this duo and the next
     playing = []                                                         # the session of the duo now playing
@@ -49,6 +71,7 @@ def make_handler(generator, left=None):
                 self.duo(first, opened)
 
         def turn(self):
+            self.wfile.write(f"engine {engine.NAME}\n".encode())
             for name, (_, low, high, unit, what) in KNOBS.items():
                 self.wfile.write(f"knob {name} {knobs[name]} {low} {high} {KNOBS[name][0]} {unit or '-'} {what}\n".encode())
             self.wfile.write(b"ready\n")
@@ -84,14 +107,14 @@ def make_handler(generator, left=None):
                 print("duo: started")
                 inbox = queue.Queue()
                 threading.Thread(target=self.read, args=(inbox, first), daemon=True).start()
-                hands = {} if left is None else {'left': left}
-                session = DuoSession(generator.model, generator.device, started=opened, **hands, **knobs)
+                session = player.session(started=opened, **knobs)
                 heard, played, shown = 0, 0, None
                 playing.append(session)
                 try:
                     while True:
                         # your keys come first; otherwise sample on, or wait while far enough ahead
-                        wait = None if session.base is None else max(session.ahead() - LOOKAHEAD, 0) / TIME_RESOLUTION
+                        # both engines count in ticks of 10 ms
+                        wait = None if session.base is None else max(session.ahead() - LOOKAHEAD, 0) / 100
                         try:
                             note = inbox.get(timeout=wait) if wait != 0 else inbox.get_nowait()
                         except queue.Empty:
@@ -108,8 +131,8 @@ def make_handler(generator, left=None):
                             if cut is not None:
                                 self.wfile.write(f"cut {cut:.3f}\n".encode())
                         elif session.ahead() < LOOKAHEAD:
-                            onset, duration, pitch, hand = session.play()
-                            self.wfile.write(f"note {onset:.3f} {duration:.3f} {pitch} {hand}\n".encode())
+                            onset, duration, pitch, *how = session.play()
+                            self.wfile.write(f"note {onset:.3f} {duration:.3f} {pitch} {' '.join(map(str, how))}\n".encode())
                             played += 1
                 except (BrokenPipeError, ConnectionResetError):
                     pass
@@ -122,8 +145,8 @@ def make_handler(generator, left=None):
                 for line in itertools.chain([first], self.rfile):
                     kind, *values = line.split()
                     if kind == b'on':
-                        onset, duration, pitch = values
-                        inbox.put((float(onset), float(duration), int(pitch)))
+                        onset, duration, pitch, *velocity = values
+                        inbox.put((float(onset), float(duration), int(pitch), int(velocity[0]) if velocity else 80))
             except (ConnectionResetError, ValueError) as e:
                 print(f"duo: bad input ({e})")
             finally:
@@ -141,10 +164,18 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8765)
-    parser.add_argument('--model', default=None, help='Hugging Face name or local path of the AMT model')
+    parser.add_argument('--engine', choices=('amt', 'aria'), default='amt')
+    parser.add_argument('--model', default=None, help='amt: Hugging Face name or local path of the AMT model')
     parser.add_argument('--left', type=int, default=None,
-                        help='the General MIDI program its left hand is in the context (default: duo.LEFT, a bass)')
+                        help='amt: the General MIDI program its left hand is in the context (default: duo.LEFT, a bass)')
+    parser.add_argument('--checkpoint', help='aria: the model.safetensors of aria-medium-gen (or one fine-tuned)')
+    parser.add_argument('--genre', default='jazz', help="aria: the genre it is told the music is ('' for none)")
     args = parser.parse_args()
-    generator = AMTGenerator(model_name=args.model)
-    print(f"AMT model loaded on {generator.device}, listening on {args.host}:{args.port}")
-    Server((args.host, args.port), make_handler(generator, args.left)).serve_forever()
+    if args.engine == 'aria':
+        if not args.checkpoint:
+            parser.error('--engine aria needs --checkpoint')
+        player = aria(args.checkpoint, args.genre or None)
+    else:
+        player = amt(args.model, args.left)
+    print(f"listening on {args.host}:{args.port}")
+    Server((args.host, args.port), make_handler(player)).serve_forever()
