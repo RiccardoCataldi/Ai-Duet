@@ -28,14 +28,25 @@ class DuoTest(unittest.TestCase):
 
     def test_your_key_goes_to_the_model_at_once_with_a_guessed_duration(self):
         self.duo.note_on(60, 90, 101.5)
-        self.assertEqual(self.sent, [f"on 1.500 {main.GUESS_S:.3f} 60\n"])
+        self.assertEqual(self.sent, [f"on 1.500 {main.GUESS_S:.3f} 60 90\n"])
 
     def test_the_guess_follows_how_long_you_hold_your_notes(self):
         for i, pitch in enumerate((60, 62, 64)):
             self.duo.note_on(pitch, 90, 101 + i)
             self.duo.note_off(pitch, 101 + i + 0.1)
         self.duo.note_on(65, 90, 105)
-        self.assertEqual(self.sent[-1], "on 5.000 0.100 65\n")
+        self.assertEqual(self.sent[-1], "on 5.000 0.100 65 90\n")
+
+    def test_when_your_note_stops_sounding_the_model_hears_how_long_it_lasted_pedal_and_all(self):
+        self.duo.note_on(60, 90, 101.0)
+        self.duo.note_off(60, 101.4)
+        self.assertEqual(self.sent[-1], "off 1.000 60 0.400\n")
+        self.duo.sustain(127, 102.0)
+        self.duo.note_on(62, 90, 102.5)
+        self.duo.note_off(62, 102.6)
+        self.assertTrue(self.sent[-1].startswith("on 2.500"))   # the pedal holds it
+        self.duo.sustain(0, 104.0)
+        self.assertEqual(self.sent[-1], "off 2.500 62 1.500\n")
 
     def test_the_model_plays_its_notes_when_they_are_due_and_lets_them_ring(self):
         self.duo.receive("note 2.000 0.500 67\n")
@@ -99,6 +110,11 @@ class DuoTest(unittest.TestCase):
             levels.append([m[2] for m, generated in out.messages if generated][0])
         self.assertGreater(levels[1], levels[0] + 30)
 
+    def test_it_strikes_its_keys_as_hard_as_the_model_says_when_it_says(self):
+        self.duo.receive("note 2.000 0.500 60 right 110\n")
+        self.duo.tick(102.0)
+        self.assertEqual(self.generated_velocities(), {60: 110})
+
     def test_its_line_swells_as_it_rises(self):
         line = [60, 62, 64, 65, 67, 69, 71, 72]
         low = main.dynamics(60, 'right', [60], line, 80, False, random.Random(0))
@@ -109,6 +125,7 @@ class DuoTest(unittest.TestCase):
         self.duo.receive("note 2.000 0.200 60\n")
         self.duo.tick(102.0 + main.LATE_S + 0.05)
         self.assertEqual(self.out.generated_on(), [])
+        self.assertEqual(self.duo.late, 1)
 
 
 if __name__ == '__main__':

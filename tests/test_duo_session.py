@@ -8,9 +8,10 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from anticipation.config import CONTEXT_SIZE, MAX_PITCH
-from anticipation.vocab import NOTE_OFFSET, TIME_OFFSET, VOCAB_SIZE
+from anticipation.vocab import DUR_OFFSET, NOTE_OFFSET, TIME_OFFSET, VOCAB_SIZE
 from music_transformer import duo
 from music_transformer.duo import DuoSession
+from music_transformer.listener import hands
 
 
 class Cache:
@@ -81,7 +82,33 @@ class DuoSessionTest(unittest.TestCase):
         dropped = [n for n in notes if n[0] > 0.5 + duo.MARGIN / 100]
         self.assertEqual(cut, dropped[0][0] if dropped else None)
         self.assertEqual(len(self.session.seq), 1 + 3 * (1 + len(kept) + 1))
-        self.assertEqual(self.session.seq[-1], NOTE_OFFSET + 62)
+        events = self.session._events()
+        self.assertEqual([e[0] for e in events], sorted(e[0] for e in events))
+        self.assertIn([TIME_OFFSET + 50, DUR_OFFSET + 30, NOTE_OFFSET + 62], events)   # when you played it
+        self.session.play()
+        self.assertEqual(self.model.fed, len(self.session.seq) - 1)
+
+    def test_you_are_heard_when_you_played_even_before_its_notes_already_on_their_way(self):
+        self.session.hear(0.0, 0.3, 60)
+        notes = list(self.fill())
+        coming = next(n for n in notes if n[0] > 0.5)
+        self.clock.t = coming[0] - 0.05   # it sounds within MARGIN: it stays
+        self.session.hear(coming[0] - 0.08, 0.3, 62)   # your key reached it a little late
+        times = [e[0] - TIME_OFFSET for e in self.session._events()]
+        yours = [e[2] - NOTE_OFFSET for e in self.session._events()].index(62)
+        self.assertEqual(times[yours], round((coming[0] - 0.08) * 100))
+        self.assertIn(round(coming[0] * 100), times[yours + 1:])
+        self.assertEqual(times, sorted(times))
+        self.session.play()
+        self.assertEqual(self.model.fed, len(self.session.seq) - 1)
+
+    def test_when_you_let_go_it_hears_how_long_your_note_really_was(self):
+        self.session.hear(0.0, 0.3, 60)
+        list(self.fill())
+        self.session.release(0.0, 60, 2.0)
+        self.assertEqual(self.session.seq[2], DUR_OFFSET + 200)
+        self.assertEqual(self.session.past.length, 2)   # fed again from there
+        self.assertEqual(self.session.listener.held, set())
         self.session.play()
         self.assertEqual(self.model.fed, len(self.session.seq) - 1)
 
@@ -105,7 +132,7 @@ class DuoSessionTest(unittest.TestCase):
             session = DuoSession(StuckModel(), 'cpu', clock=self.clock, hands=hands)
             session.hear(0.0, 0.3, 60)
             notes = [session.play() for _ in range(40)]
-            for hand, most, step in (('right', duo.MAX_CHORD, duo.MIN_STEP), ('left', duo.LEFT_CHORD, duo.LEFT_STEP)):
+            for hand, most, step in (('right', duo.CHORD, duo.MIN_STEP), ('left', duo.LEFT_CHORD, duo.LEFT_STEP)):
                 onsets = {}
                 for onset, _, pitch, played in notes:
                     if played == hand:
@@ -119,6 +146,67 @@ class DuoSessionTest(unittest.TestCase):
                 pitches = [pitch for _, _, pitch, played in notes if played == hand]
                 runs = [tuple(pitches[i:i + duo.NO_REPEAT]) for i in range(len(pitches) - duo.NO_REPEAT + 1)]
                 self.assertEqual(len(runs), len(set(runs)))
+
+    def test_it_comps_in_chords_while_you_play_and_plays_lines_when_you_rest(self):
+        for you_play, most in ((True, 4), (False, 1)):
+            session = DuoSession(StuckModel(), 'cpu', clock=self.clock, hands=1, chord=4, solo_chord=1, no_repeat=8)
+            session.hear(0.0, 0.3, 60)
+            self.clock.t = 0.0 if you_play else 3.0
+            onsets = {}
+            for onset, _, pitch, _ in (session.play() for _ in range(12)):
+                onsets.setdefault(onset, []).append(pitch)
+            self.assertEqual(max(map(len, onsets.values())), most)
+        self.clock.t = 0.0
+
+    def test_your_hands_are_where_you_play_an_octave_apart(self):
+        self.assertEqual(hands([52, 55, 59, 62, 76, 79, 83]), [(52, 62), (76, 83)])
+        self.assertEqual(hands([60, 71]), [(60, 71)])   # a seventh apart: one hand, the keys between too
+        self.assertEqual(hands([60, 72]), [(60, 60), (72, 72)])   # an octave: room between
+        self.assertEqual(hands([]), [])
+
+    def while_you_play(self, held, n=40):
+        """The first note of `n` duos in which you hold `held`: each sounds while you are still playing."""
+        pitches = []
+        for _ in range(n):
+            session = DuoSession(UniformModel(), 'cpu', clock=Clock(), apart=6.0, hands=1, lowest=2, highest=7,
+                                 max_rest=50)
+            for pitch in held:
+                session.hear(0.0, 30.0, pitch)
+            pitches.append(session.play()[2])
+        return pitches
+
+    def test_while_you_play_it_keeps_apart_from_your_hands_and_under_your_melody(self):
+        pitches = self.while_you_play((40, 44, 47, 76, 79, 83))   # a left hand and a right hand, held
+        inside = [p for p in pitches if 38 <= p <= 49 or p >= 74]
+        self.assertLess(len(inside), len(pitches) / 4, pitches)   # 46 of the 96 keys without it
+        self.assertTrue([p for p in pitches if 50 <= p <= 73], pitches)
+
+    def test_while_you_only_comp_it_may_take_the_melody_over_you(self):
+        pitches = self.while_you_play((48, 52, 55, 59))   # your left hand alone, held
+        self.assertLess(len([p for p in pitches if 46 <= p <= 61]), 4, pitches)
+        self.assertTrue([p for p in pitches if p >= 72], pitches)
+
+    def test_when_your_hands_leave_it_no_room_it_plays_as_it_would(self):
+        runs = []
+        for apart in (0.0, 6.0):
+            torch.manual_seed(0)
+            session = DuoSession(UniformModel(), 'cpu', clock=Clock(), hands=1, lowest=4, highest=5, apart=apart)
+            for pitch in (60, 64, 67, 72, 76, 79):   # one hand over all of C4-B5, and your melody on top
+                session.hear(0.0, 30.0, pitch)
+            runs.append([session.play() for _ in range(20)])
+        self.assertEqual(runs[0], runs[1])
+
+    def test_when_you_rest_it_sings_up_around_your_right_hand_and_its_left_hand_stays_down(self):
+        for i, pitch in enumerate((43, 47, 50, 74, 76, 77, 79, 81)):
+            self.session.hear(i * 0.1, 0.3, pitch)
+        self.clock.t = 3.0                          # you rest
+        self.session.turn(lead=6.0, answer=0, lowest=3, highest=6)
+        notes = [self.session.play() for _ in range(60)]
+        right = sorted(pitch for _, _, pitch, hand in notes if hand == 'right')
+        # its right hand has F3 to B6: a quarter of its notes under D4 and C5 in the middle without it
+        self.assertGreaterEqual(right[len(right) // 2], 80, right)
+        self.assertLess(len([p for p in right if p < 66]), len(right) / 10, right)
+        self.assertTrue([pitch for _, _, pitch, hand in notes if hand == 'left'])
 
     def test_a_knob_turned_while_it_plays_changes_its_next_notes(self):
         session = DuoSession(StuckModel(), 'cpu', clock=self.clock)
@@ -144,13 +232,15 @@ class DuoSessionTest(unittest.TestCase):
             self.session.hear(self.clock.t, 0.2, pitch)
         state = self.session.state()
         self.assertEqual(state['mode'], 'accompanying')
-        self.assertIn('under', state['active'])
+        self.assertIn('apart', state['active'])
+        self.assertIn('chord', state['active'])
         self.assertNotIn('echo', state['active'])
         self.clock.t = 2.0
         state = self.session.state()
         self.assertEqual(state['mode'], 'answering')
         self.assertIn('echo', state['active'])
-        self.assertNotIn('under', state['active'])
+        self.assertNotIn('apart', state['active'])
+        self.assertIn('lead', state['active'])
         self.clock.t = 10.0
         self.assertEqual(self.session.state()['mode'], 'alone')
         self.assertEqual(self.session.listener.chord_name({7, 11, 2, 5}), 'G7')
@@ -245,12 +335,12 @@ class DuoSessionTest(unittest.TestCase):
     def test_it_colours_your_chord_with_its_tensions_even_outside_your_key(self):
         for pitch in (48, 52, 55, 59):   # Cmaj7, C in the bass
             self.session.hear(0.0, 2.0, pitch)
-        bias = self.session._partner(30, [])
+        bias = self.session._partner(30, [], (0, MAX_PITCH - 1), True)
         d, f_sharp, c_sharp = 62, 66, 61   # its 9th, its #11 (not in C major), and a wrong note
         self.assertGreater(bias[d], bias[c_sharp])
         self.assertGreater(bias[f_sharp], bias[c_sharp])
         self.session.turn(tension=0)
-        self.assertAlmostEqual(float(self.session._partner(30, [])[d]), float(bias[d]) - duo.TENSION, places=5)
+        self.assertAlmostEqual(float(self.session._partner(30, [], (0, MAX_PITCH - 1), True)[d]), float(bias[d]) - duo.TENSION, places=5)
 
 if __name__ == '__main__':
     unittest.main()

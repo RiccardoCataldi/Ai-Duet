@@ -34,8 +34,9 @@ MACROS = [
      {'min_step': (60, 20, 8), 'space': (150, 50, 15), 'max_rest': (500, 200, 100)}),
     ('harmony', ('inside', 'outside'), "how far it strays from your key, and how it colours the chord you play",
      {'out_of_key': (5.0, 2.0, 0.0), 'chord_tone': (3.0, 1.0, 0.0), 'tension': (0.0, 1.0, 3.0)}),
-    ('role', ('accompanies', 'leads'), "while you play: it stays below you, or goes anywhere",
-     {'under': (3.0, 1.0, 0.0)}),
+    ('role', ('accompanies', 'leads'), "while you play: it keeps apart from your hands and under your melody, or goes "
+                                       "anywhere; when you rest: it comps on, or takes the melody, up where yours was",
+     {'apart': (4.0, 2.0, 0.0), 'lead': (0.0, 3.0, 6.0)}),
     ('dialogue', ('ignores you', 'answers you'), "when your phrase ends: how soon and how closely it answers it",
      {'answer': (0, 400, 1000), 'echo': (0.0, 3.0, 6.0)}),
     ('groove', ('loose', 'tight'), "how closely its notes sit on your pulse",
@@ -162,10 +163,7 @@ class Mind:
                 sock.settimeout(None)
                 with self.lock:
                     self.knobs, self.sock = knobs, sock
-                for name, value in self.saved['knobs'].items():   # as you left them
-                    if name in knobs:
-                        knobs[name].value = value
-                        self.send(knobs[name])
+                self._restore(knobs)
                 for line in lines:
                     if line.startswith('state '):
                         self.state = json.loads(line[6:])
@@ -175,7 +173,21 @@ class Mind:
                 self.knobs, self.sock, self.state = {}, None, None
             time.sleep(2)
 
-    def send(self, knob):
+    def _restore(self, knobs):
+        """Gives the server back its knobs as you left them; one you never turned starts where its control stands."""
+        saved = self.saved['knobs']
+        for name, knob in knobs.items():
+            if name in saved:
+                knob.value = saved[name]
+                self.send(knob, keep=False)
+        for macro in self.macros:
+            for name, anchors in self.turns[macro.name].items():
+                if name in knobs and name not in saved:   # not kept: it follows its control until you turn it
+                    knobs[name].value = along(anchors, macro.value)
+                    self.send(knobs[name], keep=False)
+
+    def send(self, knob, keep=True):
+        """Turns `knob` on the server and, unless `keep` is False, keeps it for next time."""
         with self.lock:
             sock = self.sock
         if sock is None:
@@ -184,8 +196,9 @@ class Mind:
             sock.sendall(f"set {knob.name} {knob.value:.4f}\n".encode())
         except OSError:
             return
-        self.saved['knobs'][knob.name] = knob.value
-        self._save()
+        if keep:
+            self.saved['knobs'][knob.name] = knob.value
+            self._save()
 
     def _macro(self, macro):
         for name, anchors in self.turns[macro.name].items():

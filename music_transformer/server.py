@@ -5,7 +5,8 @@ Serve the duo over TCP so the model can run on another machine (e.g. a Jetson).
     ssh -N -L 8765:localhost:8765 jetson          # on the laptop, then AMT_SERVER=localhost:8765
 
 One line per message, times in seconds since the connection opened:
-    client -> server   "on <onset> <duration> <pitch>"   you pressed a key (the duration is a guess)
+    client -> server   "on <onset> <duration> <pitch> <velocity>"   you pressed a key (the duration is a guess)
+    client -> server   "off <onset> <pitch> <duration>"  the key you pressed at <onset> stopped sounding (pedal and all)
     server -> client   "note <onset> <duration> <pitch> <hand>"   the model's next note, of its left or right hand
     server -> client   "cut <onset>"                     forget the model's notes from <onset> on: they are resampled
 One duo at a time; a second connection waits for the first to close.
@@ -19,17 +20,28 @@ A connection that starts with "knobs" turns the duo's knobs (duo.KNOBS) instead,
 import argparse
 import itertools
 import json
+import math
 import queue
 import socketserver
+import statistics
 import threading
 import time
 
 from anticipation.config import TIME_RESOLUTION
 
 from music_transformer.amt import AMTGenerator
-from music_transformer.duo import ALWAYS, KNOBS, LOOKAHEAD, DuoSession, knob
+from music_transformer.duo import ALWAYS, KNOBS, LOOKAHEAD, MARGIN, DuoSession, knob
 
 STATE_S = 0.25    # how often a knobs connection hears what the duo is doing
+
+
+def ms(seconds):
+    """'40 ms (95% within 60 ms)': the median and the 95th percentile of `seconds`."""
+    if not seconds:
+        return '-'
+    ordered = sorted(seconds)
+    worst = ordered[math.ceil(0.95 * len(ordered)) - 1]
+    return f"{statistics.median(ordered) * 1000:.0f} ms (95% within {worst * 1000:.0f} ms)"
 
 
 def make_handler(generator, left=None):
@@ -87,6 +99,7 @@ def make_handler(generator, left=None):
                 hands = {} if left is None else {'left': left}
                 session = DuoSession(generator.model, generator.device, started=opened, **hands, **knobs)
                 heard, played, shown = 0, 0, None
+                sampling, answers, since = [], [], None   # seconds to sample each note; from your note to its next
                 playing.append(session)
                 try:
                     while True:
@@ -98,32 +111,46 @@ def make_handler(generator, left=None):
                             note = False
                         if note is None:
                             break
-                        if note:
+                        if note and note[0] == 'off':
+                            session.release(*note[1:])
+                        elif note:
                             heard += 1
-                            cut = session.hear(*note)
+                            since = since or time.perf_counter()
+                            cut = session.hear(*note[1:])
                             key, sure = session.listener.key()
                             if key != shown and sure > 0.3:
                                 shown = key
-                                print(f"duo: {note[0]:.1f}s you are in {session.listener.name(key)} ({sure:.0%})")
+                                print(f"duo: {note[1]:.1f}s you are in {session.listener.name(key)} ({sure:.0%})")
                             if cut is not None:
                                 self.wfile.write(f"cut {cut:.3f}\n".encode())
                         elif session.ahead() < LOOKAHEAD:
+                            begun = time.perf_counter()
                             onset, duration, pitch, hand = session.play()
                             self.wfile.write(f"note {onset:.3f} {duration:.3f} {pitch} {hand}\n".encode())
+                            sampling.append(time.perf_counter() - begun)
+                            if since:
+                                answers.append(time.perf_counter() - since)
+                                since = None
                             played += 1
                 except (BrokenPipeError, ConnectionResetError):
                     pass
                 finally:
                     playing.remove(session)
                 print(f"duo: ended, heard {heard} notes, played {played}")
+                if sampling:
+                    print(f"duo: a note took {ms(sampling)} to sample; its first after yours went out {ms(answers)} "
+                          f"after it (it sounds no sooner than {MARGIN * 10} ms after)")
 
         def read(self, inbox, first):
             try:
                 for line in itertools.chain([first], self.rfile):
                     kind, *values = line.split()
                     if kind == b'on':
-                        onset, duration, pitch = values
-                        inbox.put((float(onset), float(duration), int(pitch)))
+                        onset, duration, pitch, *velocity = values
+                        inbox.put(('on', float(onset), float(duration), int(pitch), int(velocity[0]) if velocity else 80))
+                    elif kind == b'off':
+                        onset, pitch, duration = values
+                        inbox.put(('off', float(onset), int(pitch), float(duration)))
             except (ConnectionResetError, ValueError) as e:
                 print(f"duo: bad input ({e})")
             finally:

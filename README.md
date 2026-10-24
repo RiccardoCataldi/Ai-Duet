@@ -10,7 +10,7 @@ An interactive AI music generation system that responds to MIDI keyboard input i
 
 - Real-time MIDI input processing
 - AI-powered music generation based on your playing
-- A real-time duo of two pianos: the model improvises with two hands of its own while you play. It listens like a partner: it follows your key and your modulations, hears the jazz chord you play (maj7, m7b5, sus, 6 told apart by the bass) and colours it with its 9th, 11th and 13th, keeps to your pulse, stays under you while you play and answers your phrases when you rest
+- A real-time duo of two pianos: the model improvises with two hands of its own while you play. It listens like a partner: it follows your key and your modulations, hears the jazz chord you play (maj7, m7b5, sus, 6 told apart by the bass) and colours it with its 9th, 11th and 13th, keeps to your pulse, hears each note when you played it and for as long as it sounds (pedal and all), comps in chords apart from your hands while you play, and when you rest takes the melody up where yours was, playing lines and answering your phrases
 - It plays with dynamics, as a pianist does: as loud as you play, softer while it accompanies you, its top voice singing over its inner voices and its left hand; and your sustain pedal sounds and is heard
 - Different instruments for input and generated music
 - MIDI file saving and playback capabilities
@@ -45,7 +45,7 @@ At the top it says what the model hears and does: your key, the chord you play, 
   |---|---|---|
   | density | sparse ... dense | `min_step`, `space`, `max_rest` |
   | harmony | inside ... outside | `out_of_key`, `chord_tone`, `tension` |
-  | role | accompanies ... leads (while you play) | `under` |
+  | role | accompanies ... leads | `apart` (while you play), `lead` (when you rest) |
   | dialogue | ignores you ... answers you (when your phrase ends) | `answer`, `echo` |
   | groove | loose ... tight | `grid` |
   | risk | safe ... adventurous | `temperature`, `top_p` |
@@ -113,14 +113,14 @@ The model runs on a Jetson Orin Nano (JetPack 6) and the laptop handles MIDI and
 ssh -t jetson sudo jetson_clocks   # the clocks go back to defaults after every reboot
 ./run_duet.sh                      # from this repo, on the laptop
 ```
-`run_duet.sh` restarts everything: the server on the Jetson, the SSH tunnel on port 8765, FluidSynth, `main.py` on the KeyStep and the piano roll.
+`run_duet.sh` restarts everything: the server on the Jetson, the SSH tunnel on port 8765, FluidSynth, `main.py` on the KeyStep and the piano roll. Closing the piano roll stops the duo (it is saved in `generated/`) and the sound. The KeyStep can be unplugged and plugged back in while the duo plays. Another ssh host or other server arguments: `DUET_HOST=pc SERVER_ARGS="--model ~/models/music-medium-800k --left 0" ./run_duet.sh`.
 
-**Logs:** `~/amt_server.log` on the Jetson (`duo: started`, the key it hears you in each time it changes, then how many notes it heard and played);
-`duet.log`, `fluidsynth.log` and `pianoroll.log` on the laptop in `$LOG_DIR` (default `/tmp`).
+**Logs:** `~/amt_server.log` on the Jetson (`duo: started`, the key it hears you in each time it changes, then how many notes it heard and played, how long a note took to sample and how soon its first note after yours went out);
+`duet.log` (at the end, how many of the model's notes came too late and were skipped), `fluidsynth.log` and `pianoroll.log` on the laptop in `$LOG_DIR` (default `/tmp`).
 
 **Changing the code on the Jetson:** it does not pull from git; copy the files over, e.g.
 `scp music_transformer/duo.py jetson:~/Ai-Duet/music_transformer/`, then run `./run_duet.sh` again.
-The server now says which hand plays each note (`note <onset> <duration> <pitch> <hand>`): copy `music_transformer/` to the Jetson whenever you update `main.py` on the laptop.
+`main.py` and the server speak one protocol (top of `music_transformer/server.py`; `main.py` now also says when your notes stop sounding): copy `music_transformer/` to the Jetson whenever you update `main.py` on the laptop.
 The session tests need torch, so run them there: `python -m unittest tests.test_duo_session`.
 
 **The model's sound** (top of `main.py`): `RING`, `RING_S` (how long its notes ring past what the model wrote), its dynamics (`SOFTER`: how much softer than you it plays, `ACCOMPANY`: softer still while you play, `LEFT_HAND`, `TOP` and `INNER`: its left hand and its inner voices under its top voice, `CONTOUR`: how much its line swells as it rises, `HUMAN`: how much each velocity varies), `GENERATED_CONTROLS` (volume, pan, reverb and chorus sends, until the piano roll sets its own); a sound saved before the duo became two pianos keeps its electric piano: double-click the **AI sound** knobs to put them back; the room itself is `REVERB` and `CHORUS` in `run_duet.sh`; the rest is in the **Your sound** and **AI sound** knobs.
@@ -131,7 +131,9 @@ The session tests need torch, so run them there: `python -m unittest tests.test_
 - `TENSION`: how much it colours your chord with its tensions (`TENSIONS` in `music_transformer/listener.py`: the 9th, #11 and 13th of a major seventh...); a tension is never taken away as out of key
 - `HANDS` (the `hands` knob): one hand, or its line over a left hand of its own. The left hand is another instrument in the model's context (`LEFT`, a bass, or `--left` on the server), so the model hears two parts; it keeps under `LEFT_TOP` and the right hand over `RIGHT_BOTTOM`, with its own rhythm (`LEFT_STEP`) and chords of up to `LEFT_CHORD` notes. Both sound as the model's piano
 - `MAX_REST`: the longest silence it may leave (longer lets it lay out, as a partner does)
-- `UNDER`: how firmly it stays below you while you play
+- `CHORD`, `SOLO_CHORD`: the most notes its right hand starts at once while you play (it comps) and when you rest (lines)
+- `APART`: while you play, how firmly it keeps apart from your hands (`AROUND` semitones round each; an octave between two notes makes two hands) and, once your top hand reaches `TOP` (C5), under your melody; it keeps apart less when that leaves a hand of its under `ROOM` free keys
+- `LEAD`: when you rest, how firmly its right hand goes up where a melody sings, around the middle of your right hand (within `MELODY`, C5 to G5). Both only move where it plays: AMT picks when before where, so they never make it rest
 - `ANSWER`, `ECHO`: how long after your phrase it answers it, and how closely it follows your intervals
 - `GRID`: how tightly its onsets sit on your pulse
 - `STAY` (top of `music_transformer/listener.py`): how soon it believes you modulated (lower = sooner, more flicker)

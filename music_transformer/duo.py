@@ -14,15 +14,16 @@ from anticipation.config import CONTEXT_SIZE, MAX_DUR, MAX_PITCH, MAX_TIME, TIME
 from anticipation.vocab import AUTOREGRESS, DUR_OFFSET, NOTE_OFFSET, TIME_OFFSET
 from anticipation.sample import safe_logits, nucleus
 
-from music_transformer.listener import STAY, TENSIONS, Listener
+from music_transformer.listener import STAY, Listener, hands
 
 LOOKAHEAD = 100   # ticks the model plays ahead of now (1 s)
 MARGIN = 15       # ticks: a new note of the model sounds no earlier than this, to cover sampling and the network
 MAX_REST = 200    # ticks: the longest silence the model may leave; it reads long silences as a sparse piece and stops
 LONGEST_REST = 800   # ticks: the most the max_rest knob allows
 # left free, the model plays like a full Lakh MIDI track: dense chords and the same arpeggio over and over.
-# These keep it a soloist.
-MAX_CHORD = 2     # most notes the model may start at once (its right hand)
+# These keep it a pianist: it comps in chords while you play and plays lines when you rest.
+CHORD = 3         # most notes its right hand may start at once while you play
+SOLO_CHORD = 2    # and when you rest
 MIN_STEP = 20     # ticks between two of its onsets that are not a chord
 NO_REPEAT = 3     # it may not play again a run of this many pitches it played in its last LINE notes
 LINE = 32
@@ -34,7 +35,6 @@ PLAYING = 100     # ticks after your last note that you still count as playing
 CHORD_TONE = 1.0  # logit added to the tones of the chord you are playing
 TENSION = 1.0     # logit added to the tensions of that chord (its 9th, 11th or #11th, 13th), as a jazz pianist colours it
 OUT_OF_KEY = 2.0  # logit taken from a pitch class outside your key; in between while you are modulating
-UNDER = 1.0       # while you play it accompanies: logit taken from pitches at or above your lowest recent note
 ANSWER = 400      # ticks after your phrase ends in which it answers it, following its intervals
 ECHO = 3.0        # logit added to the pitch that continues your phrase's intervals
 GRID = 2          # ticks off your pulse that its onsets may land (your beat while you play, your tatum otherwise)
@@ -48,6 +48,17 @@ LEFT_STEP = 40    # ticks between two of the left hand's onsets that are not a c
 LEFT_CHORD = 3    # most notes the left hand may start at once
 LEFT_TOP = 64     # the highest pitch of the left hand (E4)
 RIGHT_BOTTOM = 53 # the lowest pitch of the right hand (F3), while there are two
+# where it plays against you, as a second pianist: clear of your hands while you play, up where a melody sings when
+# you rest
+APART = 2.0       # logit taken from the keys of your hands while you play, and from those over your melody
+LEAD = 3.0        # when you rest: logit taken from its right hand's pitches an octave or more under your melody
+RECENT = 200      # ticks of your playing, up to your last note, that say where your hands are
+AROUND = 2        # semitones it keeps clear under and over each of your hands
+TOP = 72          # once your top hand reaches C5 you play the melody: while you play, the keys over it are yours too
+ROOM = 12         # free keys a hand of its needs to keep apart at full strength; with fewer, it keeps apart less
+SPLIT = 60        # your notes from middle C up are your right hand's
+MELODY = (72, 79) # where its line sings when you rest: the middle of your right hand, from C5 to G5
+PITCHES = torch.arange(MAX_PITCH, dtype=torch.float)
 
 # the knobs you can turn while you play (the piano roll shows them): default, lowest, highest, unit, what it does
 KNOBS = {
@@ -56,7 +67,10 @@ KNOBS = {
     'out_of_key': (OUT_OF_KEY, 0.0, 6.0, '', "how strongly it keeps to your key"),
     'chord_tone': (CHORD_TONE, 0.0, 4.0, '', "how much it leans on the chord you play"),
     'tension': (TENSION, 0.0, 4.0, '', "how much it colours your chord with its 9th, 11th and 13th"),
-    'under': (UNDER, 0.0, 4.0, '', "how firmly it stays below you while you play"),
+    'chord': (CHORD, 1, 6, 'notes', "most notes it starts at once while you play: its comping"),
+    'solo_chord': (SOLO_CHORD, 1, 6, 'notes', "most notes it starts at once when you rest: lines"),
+    'apart': (APART, 0.0, 6.0, '', "how firmly it keeps apart from your hands, and under your melody, while you play"),
+    'lead': (LEAD, 0.0, 6.0, '', "how firmly it takes the melody, up where yours was, when you rest"),
     'answer': (ANSWER, 0, 1000, 'ticks', "how long after your phrase it answers it"),
     'echo': (ECHO, 0.0, 6.0, '', "how closely its answer follows your intervals"),
     'grid': (GRID, 0, 20, 'ticks', "how far off your pulse its onsets may land"),
@@ -74,9 +88,9 @@ KNOBS = {
 # what it is doing, and the knobs that shape its notes then; the others wait for their moment
 IN_EFFECT = {
     'listening': set(),
-    'accompanying': {'space', 'under'},     # you are playing
-    'answering': {'min_step', 'answer', 'echo'},   # your phrase just ended
-    'alone': {'min_step', 'answer'},        # you rest, and it has answered
+    'accompanying': {'space', 'chord', 'apart'},                   # you are playing
+    'answering': {'min_step', 'solo_chord', 'lead', 'answer', 'echo'},   # your phrase just ended
+    'alone': {'min_step', 'solo_chord', 'lead', 'answer'},         # you rest, and it has answered
 }
 ALWAYS = {'out_of_key', 'chord_tone', 'tension', 'stay', 'no_repeat', 'memory', 'max_rest', 'temperature', 'top_p',
           'lowest', 'highest', 'hands'}
@@ -145,17 +159,23 @@ class DuoSession:
         """Ticks of music already sampled beyond now; the caller samples more while this is under LOOKAHEAD."""
         return self._last_time() - self.now()
 
-    def hear(self, onset, duration, pitch):
-        """Your note, pressed at `onset`. Returns the time from which the model's unplayed notes are dropped, or None."""
+    def hear(self, onset, duration, pitch, velocity=None):
+        """Your note, pressed at `onset` (AMT does not hear how hard): the model hears it when you played it, before
+        those of its notes already on their way that come after it. Returns the time from which the model's unplayed
+        notes are dropped, or None."""
         self.listener.hear(onset, duration, pitch)
         tick = round(onset * TIME_RESOLUTION)
         if self.base is None:
             self.base = tick
-        cut = self._forget_after(self.now() + MARGIN)
-        self.heard_at = max(tick - self.base, self._last_time(), 0)
-        self.seq += [TIME_OFFSET + self.heard_at,
-                     DUR_OFFSET + min(max(round(duration * TIME_RESOLUTION), 1), MAX_DUR - 1),
+        self.heard_at = max(tick - self.base, 0)
+        horizon, later, cut = self.now() + MARGIN, self._unwind(self.heard_at), None
+        self.seq += [TIME_OFFSET + self.heard_at, DUR_OFFSET + _duration(duration),
                      NOTE_OFFSET + self.you * MAX_PITCH + pitch]
+        for event in later:
+            if self._instrument(event[2]) in self._mine() and event[0] - TIME_OFFSET > horizon:
+                cut = self._seconds(event[0] - TIME_OFFSET) if cut is None else cut   # not sounded yet: sampled again
+            else:
+                self.seq += event
         # otherwise its own line, two or three times denser than yours, drowns you out
         events = self._events()
         kept = [e for e in events
@@ -163,6 +183,20 @@ class DuoSession:
         if len(kept) < len(events):
             self._restart(kept)
         return cut
+
+    def release(self, onset, pitch, duration):
+        """Your note pressed at `onset` stopped sounding after `duration`, the pedal's ring and all: the model hears
+        how long it really was from its next note on."""
+        self.listener.release(onset, pitch, duration)
+        if self.base is None:
+            return
+        time_ = TIME_OFFSET + max(round(onset * TIME_RESOLUTION) - self.base, 0)
+        for i in range(1, len(self.seq) - 2, 3):
+            if (self.seq[i], self.seq[i + 2]) == (time_, NOTE_OFFSET + self.you * MAX_PITCH + pitch):
+                if self.seq[i + 1] != DUR_OFFSET + _duration(duration):
+                    self.seq[i + 1] = DUR_OFFSET + _duration(duration)
+                    self._crop(i + 1)
+                return
 
     @torch.no_grad()
     def play(self):
@@ -205,7 +239,7 @@ class DuoSession:
                     for note in self._banned(line, tick):
                         mask[note] = -float('inf')
                     if self.heard_at is not None:
-                        mask[first:first + MAX_PITCH] += self._partner(tick, line if instrument == self.me else [])
+                        mask[first:first + MAX_PITCH] += self._partner(tick, line, (low, high), instrument == self.me)
             token = int(torch.multinomial(torch.softmax(nucleus(logits + mask, self.top_p), -1), 1))
             self.seq.append(token)
         time_, duration, note = self.seq[-3:]
@@ -217,7 +251,7 @@ class DuoSession:
     def _hands(self, you_play):
         """(instrument, step, most notes at once, (lowest, highest) pitch) of each hand it plays with."""
         low, high = self.octaves()
-        right = (self.me, self.space if you_play else self.min_step, MAX_CHORD)
+        right = (self.me, self.space if you_play else self.min_step, self.chord if you_play else self.solo_chord)
         if self.hands == 1:
             return [(*right, (low, high))]
         hands = [(*right, (max(low, RIGHT_BOTTOM), high)), (self.left, self.left_step, LEFT_CHORD, (low, min(high, LEFT_TOP)))]
@@ -241,21 +275,14 @@ class DuoSession:
         on = mask + grid
         return on if torch.isfinite(on).any() else mask
 
-    def _partner(self, tick, line):
-        """Logits added to its pitches at `tick`: your chord and key; under you while you play; your phrase after it."""
+    def _partner(self, tick, line, register, right):
+        """Logits added to the pitches of one of its hands at `tick` (its `line`, its `register`; `right`: its right
+        hand): your chord and key; where it plays against you (_register); after your phrase, its answer."""
         at, you_play = self._seconds(tick), tick - self.heard_at < PLAYING
-        in_key, harmony = self.listener.in_key(), self.listener.harmony(at)
-        chord = harmony[2] if harmony else set()
-        colours = {(harmony[0] + step) % 12 for step in TENSIONS[harmony[1]]} - chord if harmony else set()
-        # a tension is welcome even outside your key (the #11 of a major chord): it is not taken away as a wrong note
-        bias = torch.tensor([self.chord_tone * (p % 12 in chord) + self.tension * (p % 12 in colours)
-                             - self.out_of_key * (1 - in_key[p % 12]) * (p % 12 not in colours)
-                             for p in range(MAX_PITCH)], dtype=torch.float)
-        if you_play:
-            recent = at - PLAYING / TIME_RESOLUTION - 1
-            low = min((n[2] for n in self.listener.notes if n[0] >= recent), default=MAX_PITCH)
-            bias[low:] -= self.under
-        elif line and tick - self.heard_at < self.answer:
+        in_key = self.listener.in_key()
+        bias = torch.tensor(self.listener.bias(at, self.chord_tone, self.tension, self.out_of_key)[:MAX_PITCH],
+                            dtype=torch.float) + self._register(tick, you_play, register, right)
+        if not you_play and right and line and tick - self.heard_at < self.answer:
             phrase = self.listener.phrase(at)
             answered = sum(time_ > self.heard_at for time_, _ in line)
             if 0 < answered < len(phrase):
@@ -265,6 +292,29 @@ class DuoSession:
                 if 0 <= echo < MAX_PITCH:
                     bias[echo] += self.echo
         return bias.to(self.device)
+
+    def _register(self, tick, you_play, register, right):
+        """Logits added to its pitches for where it plays at `tick`, as a second pianist: while you play, -apart on
+        your hands and over your melody, less when that leaves the hand (its `register`) little room; when you rest,
+        its right hand down to -lead an octave under where a melody sings (the middle of your right hand, from C5
+        to G5). AMT samples when before where: this moves its notes, never how often it plays."""
+        bias = torch.zeros(MAX_PITCH)
+        notes = self.listener.notes
+        if you_play:
+            at, since = self._seconds(tick), self._seconds(self.heard_at - RECENT)
+            playing = [p for o, d, p in notes if o >= since or o + d >= at or (o, p) in self.listener.held]
+            yours = hands(playing)
+            for lowest, highest in yours:
+                bias[max(lowest - AROUND, 0):highest + AROUND + 1] = -self.apart
+            if yours and yours[-1][1] >= TOP:   # the melody is yours: it does not comp over it
+                bias[yours[-1][1] + AROUND + 1:] = -self.apart
+            low, high = register
+            return bias * min(int((bias[low:high + 1] == 0).sum()) / ROOM, 1)
+        if not right:
+            return bias
+        melody = sorted(p for _, _, p in notes if p >= SPLIT)
+        middle = min(max(melody[len(melody) // 2] if melody else 0, MELODY[0]), MELODY[1])
+        return -self.lead * ((middle - PITCHES) / 12).clamp(0, 1)
 
     def _logits(self):
         inp = torch.tensor([self.seq[self.fed:]], device=self.device)
@@ -296,16 +346,20 @@ class DuoSession:
                 banned.add(notes[i + self.no_repeat - 1])
         return banned
 
-    def _forget_after(self, tick):
-        """Drops the model's trailing notes that start after `tick`; they have not sounded yet."""
-        cut = None
-        while len(self.seq) > 1 and self._instrument(self.seq[-1]) in self._mine() and self._last_time() > tick:
-            cut = self._last_time()
+    def _unwind(self, tick):
+        """Takes out of the context the events that start after `tick`; returns them, oldest first."""
+        later = []
+        while len(self.seq) > 1 and self._last_time() > tick:
+            later.insert(0, self.seq[-3:])
             del self.seq[-3:]
-        if self.fed > len(self.seq):
-            self.past.crop(len(self.seq))
-            self.fed = len(self.seq)
-        return None if cut is None else (cut + self.base) / TIME_RESOLUTION
+        self._crop(len(self.seq))
+        return later
+
+    def _crop(self, length):
+        """The KV cache keeps at most seq[:length]; the rest is fed again."""
+        if self.fed > length:
+            self.past.crop(length)
+            self.fed = length
 
     def _fit(self):
         """Keeps the context under CONTEXT_SIZE tokens and its times under MAX_TIME."""
@@ -334,3 +388,8 @@ class DuoSession:
     @staticmethod
     def _instrument(note):
         return (note - NOTE_OFFSET) // MAX_PITCH
+
+
+def _duration(seconds):
+    """Your note's duration as the model hears it: in ticks, from one to its longest."""
+    return min(max(round(seconds * TIME_RESOLUTION), 1), MAX_DUR - 1)
