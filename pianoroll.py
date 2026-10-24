@@ -170,7 +170,7 @@ class Roll:
         if self.status:
             status = self.font.render(self.status, True, AI)
             screen.blit(status, ((self.size[0] - status.get_width()) // 2, 25))
-        title = self.font.render('AI Duet', True, DIM)
+        title = self.font.render('duetto', True, DIM)
         screen.blit(title, (self.size[0] - title.get_width() - 28, 25))
         if clock is not None:
             stamp = self.small.render(f"{int(clock) // 60}:{int(clock) % 60:02d}", True, DIM)
@@ -246,7 +246,7 @@ def live(port_name, server):
     import sound
     from knobs import PANEL_W, Panel
     pygame.init()
-    pygame.display.set_caption('AI Duet')
+    pygame.display.set_caption('duetto')
     screen = pygame.display.set_mode((SIZE[0] + PANEL_W, SIZE[1]), pygame.RESIZABLE)
     midi = rtmidi.MidiIn()
     ports = midi.get_ports()

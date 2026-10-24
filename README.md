@@ -1,6 +1,6 @@
 https://github.com/user-attachments/assets/c60c41e5-e66a-45cb-8f61-24bca2126761
 
-# AI Duet
+# duetto
 
 Play a MIDI keyboard and a transformer plays a second piano with you, in real time. It listens like a partner: your key, the chord you play, your pulse, your phrases. It comps while you play and takes the melody when you rest.
 
