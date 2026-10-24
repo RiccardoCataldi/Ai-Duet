@@ -8,6 +8,7 @@ Live, it listens to what main.py sends to FluidSynth on Midi Through: channel 0 
 the knobs beside it (knobs.py) turn the model's on the Jetson while you play.
 """
 import argparse
+import math
 import os
 import subprocess
 import sys
@@ -15,6 +16,9 @@ import time
 
 import mido
 import pygame
+
+import theme
+from theme import AI, FAINT, MUTED, TEXT, YOU, mix
 
 SIZE = (1280, 720)
 FPS = 60                  # live
@@ -24,14 +28,13 @@ KEYBOARD_H = 120
 SPEED = 140               # pixels a second the notes rise
 TAIL_S = 5                # seconds the video goes on after the last note, while the reverb dies away
 
-BACKGROUND = ((12, 14, 22), (22, 26, 40))  # top, bottom
-YOU = (255, 176, 84)      # amber
-AI = (94, 214, 230)       # teal
+HEADER_H = 96            # the players, what the model hears and does, and the time, over the notes' fade
+
+BACKGROUND = theme.BACKGROUND
 WHITE_KEY = (232, 234, 240)
 BLACK_KEY = (28, 30, 38)
-GRID = (255, 255, 255, 14)
-TEXT = (210, 214, 226)
-DIM = (120, 126, 146)
+FELT = (112, 30, 44)      # the strip of red felt over the keys
+GRID = (255, 255, 255, 12)
 
 PLAYERS = {0: ('You', 'piano', YOU), 1: ('AI', 'piano', AI)}
 
@@ -57,6 +60,9 @@ class Keyboard:
                 self.x[p] = (left + self.white_w - self.black_w / 2, self.black_w)
         self.surface = pygame.Surface((width, KEYBOARD_H), pygame.SRCALPHA)
         self._draw(self.surface, {})
+        self.shadow = pygame.Surface((width, 12), pygame.SRCALPHA)
+        for y in range(12):
+            self.shadow.fill((0, 0, 0, round(110 * (1 - y / 12) ** 2)), pygame.Rect(0, y, width, 1))
 
     def _draw(self, surface, lit):
         black_h = KEYBOARD_H * 0.62
@@ -65,6 +71,9 @@ class Keyboard:
                 rect = pygame.Rect(round(x) + 1, 0, round(w) - 1, KEYBOARD_H - 2)
                 pygame.draw.rect(surface, lit.get(p, WHITE_KEY), rect, border_bottom_left_radius=4,
                                  border_bottom_right_radius=4)
+                if p % 12 == 0 and w >= 14:
+                    theme.text(surface, f"C{p // 12 - 1}", 10, (70, 74, 90) if p in lit else (150, 154, 168),
+                               (rect.centerx, rect.bottom - 6), anchor='midbottom')
         for p, (x, w) in self.x.items():
             if is_black(p):
                 rect = pygame.Rect(round(x), 0, round(w), black_h)
@@ -81,9 +90,10 @@ class Keyboard:
                           for p, colour in lit.items()})
         screen.blit(keys, (0, self.top))
 
-
-def mix(a, b, t):
-    return tuple(round(x + (y - x) * t) for x, y in zip(a, b))
+    def finish(self, screen):
+        """The felt over the keys and the shadow it casts on them."""
+        screen.blit(self.shadow, (0, self.top))
+        pygame.draw.rect(screen, FELT, (0, self.top - 1, screen.get_width(), 3))
 
 
 class Roll:
@@ -106,10 +116,12 @@ class Roll:
         self.glow = {c: glow_sprite(colour) for c, (_, _, colour) in PLAYERS.items()}
         self.instruments = {}     # channel -> the instrument it plays, if not PLAYERS'
         self.ai_range = None      # (lowest, highest) pitch the model may play, shown above the keyboard
-        self.status = None        # what the model hears and does, shown at the top
-
-        self.font = pygame.font.Font(None, 26)
-        self.small = pygame.font.Font(None, 22)
+        self.readout = None       # what the model hears and does, shown at the top: (what, as it stands)
+        self.offline = None       # or why it cannot say
+        self.hint = None          # a key to press, in the corner
+        self.header = pygame.Surface((width, HEADER_H), pygame.SRCALPHA)
+        for y in range(HEADER_H):
+            self.header.fill((*BACKGROUND[0], round(235 * (1 - y / HEADER_H) ** 1.5)), pygame.Rect(0, y, width, 1))
 
     def draw(self, screen, notes, now, clock=None):
         screen.blit(self.background, (0, 0))
@@ -140,10 +152,10 @@ class Roll:
                 screen.blit(sprite, (round(x + w / 2 - sprite.get_width() / 2), top - sprite.get_height() // 2),
                             special_flags=pygame.BLEND_ADD)
         screen.blit(self.fade, (0, 0))
-        pygame.draw.line(screen, (60, 66, 88), (0, top - 1), (self.size[0], top - 1), 2)
         self._range(screen, top)
         self.keyboard.draw(screen, lit)
-        self._legend(screen, clock)
+        self.keyboard.finish(screen)
+        self._header(screen, clock)
 
     def _range(self, screen, top):
         """A line in the model's colour over the keys it may play, when it may not play them all."""
@@ -155,26 +167,59 @@ class Roll:
             return
         left = keys[low][0]
         right = keys[high][0] + keys[high][1]
-        pygame.draw.line(screen, AI, (round(left) + 2, top - 4), (round(right) - 2, top - 4), 3)
+        pygame.draw.line(screen, AI, (round(left) + 2, top - 6), (round(right) - 2, top - 6), 3)
+        theme.text(screen, 'AI range', 11, AI, (round(left) + 4, top - 10), anchor='bottomleft')
 
-    def _legend(self, screen, clock):
+    def _header(self, screen, clock):
+        screen.blit(self.header, (0, 0))
+        width = self.size[0]
         x = 28
         for channel, (name, instrument, colour) in PLAYERS.items():
-            instrument = self.instruments.get(channel, instrument).lower()
-            pygame.draw.circle(screen, colour, (x + 6, 34), 6)
-            label = self.font.render(name, True, TEXT)
-            screen.blit(label, (x + 20, 25))
-            sub = self.small.render(instrument, True, DIM)
-            screen.blit(sub, (x + 26 + label.get_width(), 28))
-            x += 50 + label.get_width() + sub.get_width()
-        if self.status:
-            status = self.font.render(self.status, True, AI)
-            screen.blit(status, ((self.size[0] - status.get_width()) // 2, 25))
-        title = self.font.render('duetto', True, DIM)
-        screen.blit(title, (self.size[0] - title.get_width() - 28, 25))
+            instrument = self.instruments.get(channel, instrument)
+            pygame.draw.circle(screen, colour, (x + 5, 31), 5)
+            label = theme.text(screen, name, 15, TEXT, (x + 18, 21), bold=True)
+            sub = theme.text(screen, theme.fit(instrument, 12, 170), 12, MUTED, (x + 18, label.bottom + 1))
+            x = max(label.right, sub.right) + 30
+        right = width - 28
         if clock is not None:
-            stamp = self.small.render(f"{int(clock) // 60}:{int(clock) % 60:02d}", True, DIM)
-            screen.blit(stamp, (self.size[0] - stamp.get_width() - 28, 50))
+            stamp = theme.text(screen, f"{int(clock) // 60}:{int(clock) % 60:02d}", 15, TEXT, (right, 21), bold=True,
+                               anchor='topright')
+            theme.text(screen, self.hint or 'duetto', 12, MUTED, (right, stamp.bottom + 1), anchor='topright')
+        if self.readout:
+            self._readout(screen, x, right - 90)
+        elif self.offline:
+            pulse = 0.5 + 0.5 * math.sin(time.monotonic() * 4)
+            words = theme.render(self.offline, 13, MUTED)
+            pill = pygame.Rect(0, 20, words.get_width() + 40, 30)
+            pill.centerx = width // 2
+            pygame.draw.rect(screen, theme.RAISED, pill, border_radius=15)
+            pygame.draw.circle(screen, mix(theme.FAINT, AI, pulse), (pill.x + 16, pill.centery), 4)
+            screen.blit(words, words.get_rect(midleft=(pill.x + 28, pill.centery)))
+
+    def _readout(self, screen, left, right):
+        """Your key, chord and tempo, and what the model is doing, as cells across the middle, as many as fit."""
+        cells = []
+        for caption, value in self.readout:
+            value = theme.capital(value)
+            cells.append((caption.upper(), value, max(theme.width(value, 17, True), 64) + (16 if caption == 'AI' else 0)))
+        gap = 36
+        while cells and sum(w for *_, w in cells) + gap * (len(cells) - 1) > right - left:
+            cells.pop(0)
+        x = (self.size[0] - sum(w for *_, w in cells) - gap * (len(cells) - 1)) // 2
+        x = min(max(x, left), right - sum(w for *_, w in cells) - gap * (len(cells) - 1))
+        for i, (caption, value, w) in enumerate(cells):
+            if i:
+                pygame.draw.line(screen, theme.LINE, (x - gap // 2, 22), (x - gap // 2, 52))
+            theme.text(screen, caption, 10, MUTED, (x, 19), bold=True)
+            at = x
+            if caption == 'AI':
+                waiting = value.startswith('Waiting')
+                pulse = 0.5 + 0.5 * math.sin(time.monotonic() * 5)
+                pygame.draw.circle(screen, FAINT if waiting else mix(AI, (255, 255, 255), 0.3 * pulse), (x + 4, 44),
+                                   4)
+                at += 16
+            theme.text(screen, value, 17, AI if caption == 'AI' else TEXT, (at, 33), bold=True)
+            x += w + gap
 
 
 def vertical_gradient(size, top, bottom):
@@ -290,7 +335,9 @@ def live(port_name, server):
                 panel.handle(event, side.topleft)
         now = time.monotonic()
         roll.instruments = {player: sound.GM[engine.sound[player]['instrument']] for player in PLAYERS}
-        roll.status = panel.mind.status()
+        roll.readout = panel.mind.readout()
+        roll.offline = None if panel.mind.knobs else 'Connecting to the model…'
+        roll.hint = None if shown else 'K: show the controls'
         mind = {name: round(knob.value) for name, knob in panel.mind.knobs.items() if name in ('lowest', 'highest')}
         if len(mind) == 2:
             low, high = sorted(mind.values())

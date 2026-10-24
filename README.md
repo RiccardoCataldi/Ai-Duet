@@ -35,7 +35,9 @@ Without a Jetson: `python -m music_transformer.server` in one terminal, `python 
 
 ![The piano roll with the knobs](samples/duo/pianoroll-knobs.png)
 
-The top line says what the model hears (key, chord, tempo) and what it is doing. Keys: F fullscreen, K knobs, Esc close. Drag a knob or use the wheel; double click resets it, hovering explains it.
+The top of the piano roll says what the model hears (key, chord, tempo) and what it is doing. Keys: F fullscreen, K show or hide the controls, Esc close.
+
+Controls are sliders (drag them; hold Shift to drag finely) and steppers (click the arrows). The wheel or the arrow keys over a control turn it, and the wheel elsewhere scrolls the panel. A double click resets a control, and the bottom of the panel says what the control under the mouse does. A control is dimmed while what it shapes is not happening.
 
 - **AI mind**
   - Presets: **duet**, **call & response**, **it comps** (it plays the harmony, you improvise), **it solos** (you play the harmony, it improvises), **free**

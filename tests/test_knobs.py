@@ -89,6 +89,64 @@ class MindTest(unittest.TestCase):
         self.assertEqual(bpm.shown(), '96 bpm')
 
 
+class PanelTest(unittest.TestCase):
+    def setUp(self):
+        import pygame
+        import sound
+        self.pygame = pygame
+        pygame.init()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.engine = DummyEngine(sound.defaults())
+        self.panel = knobs.Panel(None, self.engine, os.path.join(self.tmp.name, 'mind.json'))
+        self.panel.tab = 1                           # your sound: it needs no server
+        self.surface = pygame.Surface((knobs.PANEL_W, 720))
+        self.panel.draw(self.surface)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def target(self, kind, name):
+        return next(rect for k, what, rect in self.panel.targets if k == kind and what.name == name)
+
+    def click(self, pos):
+        for kind in (self.pygame.MOUSEBUTTONDOWN, self.pygame.MOUSEBUTTONUP):
+            self.panel.handle(self.pygame.event.Event(kind, pos=pos, button=1), (0, 0))
+
+    def test_what_the_model_hears_and_does_reads_as_cells(self):
+        mind = knobs.Mind(None, os.path.join(self.tmp.name, 'other.json'))
+        self.assertIsNone(mind.readout())
+        mind.state = {'mode': 'alone', 'key': 'D minor', 'chord': None, 'bpm': None, 'active': []}
+        self.assertEqual(mind.readout(), [('Key', 'D minor'), ('Chord', '—'), ('Tempo', '—'),
+                                          ('AI', 'playing on its own')])
+
+    def test_a_steppers_arrows_step_it(self):
+        box = self.target('stepper', 'instrument')
+        self.click((box.right - 5, box.centery))
+        self.click((box.right - 5, box.centery))
+        self.assertEqual(self.engine.calls[-1], (0, 'instrument', 2))
+        self.click((box.x + 5, box.centery))
+        self.assertEqual(self.engine.calls[-1], (0, 'instrument', 1))
+
+    def test_the_wheel_turns_a_control_under_it_and_scrolls_elsewhere(self):
+        from unittest import mock
+        track = self.target('slider', 'volume')
+        with mock.patch('pygame.mouse.get_pos', return_value=track.center):
+            self.panel.handle(self.pygame.event.Event(self.pygame.MOUSEWHEEL, x=0, y=1), (0, 0))
+        self.assertEqual(self.engine.calls[-1][1], 'volume')
+        self.assertEqual(self.panel.scroll[1], 0)
+        with mock.patch('pygame.mouse.get_pos', return_value=(knobs.PAD, knobs.HEADER_H + 4)):
+            self.panel.handle(self.pygame.event.Event(self.pygame.MOUSEWHEEL, x=0, y=-1), (0, 0))
+        self.assertGreater(self.panel.scroll[1], 0)
+
+
+class DummyEngine:
+    def __init__(self, values):
+        self.sound, self.calls = values, []
+
+    def set(self, player, name, value):
+        self.calls.append((player, name, round(value)))
+
+
 class DummySocket:
     def sendall(self, data):
         pass
