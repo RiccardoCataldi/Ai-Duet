@@ -21,6 +21,7 @@ GENERATED_PROGRAM = 0    # Acoustic Grand Piano too: a duo of two pianos, you on
 INPUT_CONTROLS = ((10, 40),)                                  # pan
 GENERATED_CONTROLS = ((7, 100), (10, 88), (91, 70), (93, 0))  # volume, pan, reverb send, chorus send
 PEDAL = 64               # the sustain pedal's control
+PLUG_S = 1.0             # how often we look whether your keyboard was unplugged or plugged back in
 RING = 1.6               # its notes ring this much longer than the model wrote them, as if with a light pedal
 RING_S = 0.4             # and at least this many seconds more
 # its dynamics, shaped as a pianist shapes them; it follows how loud you play (LEVEL: how much your last note counts)
@@ -196,6 +197,7 @@ if __name__ == "__main__":
     codeK = Setup()
     myPort = codeK.perform_setup()
     codeK.open_port(myPort)
+    keyboard = codeK.port_name(myPort)
 
     midiRec = CK_rec(myPort, 0x90, debug=False)
     midiRec.set_input_instrument(INPUT_PROGRAM)
@@ -234,9 +236,23 @@ if __name__ == "__main__":
         signal.signal(sig, signal.default_int_handler)
     print("Play: the model improvises with you. Ctrl+C to stop.")
 
+    plugged, looked = True, time.monotonic()
     try:
         while True:
-            duo.tick(time.monotonic())
+            now = time.monotonic()
+            duo.tick(now)
+            if now - looked > PLUG_S:
+                looked = now
+                if plugged and not codeK.present(keyboard):
+                    plugged = False
+                    print("Keyboard unplugged: waiting for it to come back")
+                    # its last note-offs never came: let go of the keys and the pedal it was holding
+                    on_midi(([0xB0, PEDAL, 0], 0))
+                    for pitch in list(duo.held):
+                        on_midi(([0x80, pitch, 0], 0))
+                elif not plugged and codeK.present(keyboard):
+                    codeK.reopen(keyboard)
+                    plugged = True
             time.sleep(0.002)
     except KeyboardInterrupt:
         pass

@@ -1,5 +1,11 @@
+import re
 import time
 import rtmidi
+
+
+def device(port):
+    """A port's name without its ALSA client number, which can change when the device is plugged in again."""
+    return re.sub(r' \d+:\d+$', '', port)
 
 class Setup(object):
 
@@ -65,7 +71,25 @@ class Setup(object):
         return self.__midiout.send_message(message)
 
     def set_callback(self,cb):
+        self.__callback = cb
         self.__midiin.set_callback(cb)
+
+    def port_name(self, pnum):
+        return self.__ports[pnum]
+
+    def present(self, name):
+        """Whether the device of the port `name` is plugged in."""
+        return device(name) in map(device, self.__midiin.get_ports())
+
+    def reopen(self, name):
+        """Opens the device of the port `name` again, after it was unplugged and plugged back in."""
+        ports = self.__midiin.get_ports()
+        pnum = next(i for i, p in enumerate(ports) if device(p) == device(name))
+        self.__midiin.close_port()
+        self.__midiin.open_port(pnum)
+        self.__midiin.ignore_types(True, True, False)
+        self.__midiin.set_callback(self.__callback)
+        print("Plugged in again:", ports[pnum])
 
     def get_device_id(self):
         print("Hit any note to get the device_id.")

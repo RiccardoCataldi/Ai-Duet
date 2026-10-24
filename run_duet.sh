@@ -3,6 +3,8 @@
 cd "$(dirname "$0")"
 LOG=${LOG_DIR:-/tmp}
 
+# the watcher of the old window first, or it would stop what we start below
+[ -f "$LOG/duet-window.pid" ] && kill "$(cat "$LOG/duet-window.pid")" 2>/dev/null
 pkill -INT -f "^\.venv/bin/python main\.py"; sleep 2; pkill -f "^\.venv/bin/python main\.py"
 pkill -f "^\.venv/bin/python pianoroll\.py"
 pkill -x timidity
@@ -34,5 +36,7 @@ echo "$KEYSTEP" | AMT_SERVER=localhost:8765 PYTHONUNBUFFERED=1 setsid nohup .ven
 sleep 4
 grep -E "chosen|output opened|Playing with" "$LOG/duet.log"
 
-# the piano roll of you and the model (F: fullscreen)
-setsid nohup .venv/bin/python pianoroll.py > "$LOG/pianoroll.log" 2>&1 < /dev/null &
+# the piano roll of you and the model (F: fullscreen); closing it stops the duet (main.py saves it) and the sound
+setsid nohup bash -c '.venv/bin/python pianoroll.py > "$1/pianoroll.log" 2>&1
+  pkill -INT -f "^\.venv/bin/python main\.py"; sleep 2; pkill -x fluidsynth' duet-window "$LOG" < /dev/null > /dev/null 2>&1 &
+echo $! > "$LOG/duet-window.pid"
