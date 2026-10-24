@@ -14,8 +14,8 @@ class Out:
     def __init__(self):
         self.messages = []
 
-    def play_midi_message(self, message, is_generated=False):
-        self.messages.append((list(message), is_generated))
+    def play_midi_message(self, message, is_generated=False, channel=None):
+        self.messages.append((list(message), is_generated) if channel is None else (list(message), channel))
 
     def generated_on(self):
         return [m[1] for m, generated in self.messages if generated and m[0] == 0x90]
@@ -126,6 +126,19 @@ class DuoTest(unittest.TestCase):
         self.duo.tick(102.0 + main.LATE_S + 0.05)
         self.assertEqual(self.out.generated_on(), [])
         self.assertEqual(self.duo.late, 1)
+
+    def test_the_metronome_clicks_the_models_beats_from_when_the_connection_opened_with_the_bar_accented(self):
+        self.duo.receive("tempo 120 1\n")
+        clicks = []
+        for ms in range(1300, 3300, 2):           # 1.3 s to 3.3 s after the connection opened
+            self.out.messages = []
+            self.duo.tick(100.0 + ms / 1000)
+            clicks += [(ms, m[1]) for m, channel in self.out.messages if channel == main.DRUMS and m[0] == 0x90]
+        self.assertEqual(clicks, [(1500, 77), (2000, 76), (2500, 77), (3000, 77)])   # beat 4 is the second bar's first
+        self.duo.receive("tempo 120 0\n")
+        self.out.messages = []
+        self.duo.tick(103.5)
+        self.assertEqual(self.out.messages, [])
 
 
 if __name__ == '__main__':

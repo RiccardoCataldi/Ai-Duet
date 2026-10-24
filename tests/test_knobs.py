@@ -83,6 +83,10 @@ class MindTest(unittest.TestCase):
         scale = knobs.Knob('scale', 3, 0, 3, 0, 'choice:yours/major/natural_minor/harmonic_minor', '', True, print)
         self.assertEqual(scale.shown(), 'harmonic minor')
         self.assertEqual(scale.step(), 1)
+        bpm = knobs.Knob('bpm', 0, 0, 240, 0, 'bpm', '', True, print)
+        self.assertEqual(bpm.shown(), 'yours')
+        bpm.value = 96
+        self.assertEqual(bpm.shown(), '96 bpm')
 
 
 class DummySocket:

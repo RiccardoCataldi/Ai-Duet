@@ -87,6 +87,8 @@ KNOBS = {
     'root': (0, 0, 11, 'choice:' + '/'.join(NAMES), "the root of the scale you force it into"),
     'scale': (0, 0, len(FORCED), 'choice:' + '/'.join(['yours', *FORCED]),
               "the scale it keeps to: your key as it hears it, or one you force it into"),
+    'bpm': (0, 0, 240, 'bpm', "the tempo it keeps to, its beats on the metronome's: yours as it hears it, or one you fix"),
+    'metronome': (0, 0, 1, 'choice:off/on', "a click on each beat of the tempo you fix"),
 }
 # what it is doing, and the knobs that shape its notes then; the others wait for their moment
 IN_EFFECT = {
@@ -96,7 +98,7 @@ IN_EFFECT = {
     'alone': {'min_step', 'solo_chord', 'lead', 'answer'},         # you rest, and it has answered
 }
 ALWAYS = {'out_of_key', 'chord_tone', 'tension', 'stay', 'no_repeat', 'memory', 'max_rest', 'temperature', 'top_p',
-          'lowest', 'highest', 'hands', 'scale'}
+          'lowest', 'highest', 'hands', 'scale', 'bpm'}
 
 
 def knob(name, value):
@@ -128,11 +130,13 @@ class DuoSession:
             self.listener.stay(self.stay)
         if 'root' in knobs or 'scale' in knobs:
             self.listener.force(self.root, list(FORCED)[self.scale - 1] if self.scale else None)
+        if 'bpm' in knobs:
+            self.listener.fix(self.bpm)
 
     def state(self):
         """What it hears and what it is doing: {'mode', 'key', 'chord', 'bpm', 'active': the knobs in effect}."""
         if self.base is None or self.heard_at is None:
-            return {'mode': 'listening', 'key': self.listener.forced_name(), 'chord': None, 'bpm': None,
+            return {'mode': 'listening', 'key': self.listener.forced_name(), 'chord': None, 'bpm': self.bpm or None,
                     'active': sorted(ALWAYS)}
         now = self.now()
         at = self._seconds(now)
@@ -147,6 +151,7 @@ class DuoSession:
         pulse = self.listener.pulse(at)
         active = ALWAYS | IN_EFFECT[mode] | ({'grid'} if pulse else set()) | ({'left_step'} if self.hands == 2 else set())
         active = active - {'stay'} | {'root'} if self.scale else active   # forced: your key no longer counts
+        active |= {'metronome'} if self.bpm else set()
         heard = self.listener.name(key) if sure > 0.3 else None
         return {'mode': mode, 'key': self.listener.forced_name() or heard,
                 'chord': self.listener.chord_label(at) if chord else None,

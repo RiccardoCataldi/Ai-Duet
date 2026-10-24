@@ -1,8 +1,8 @@
 """
 Knobs on screen next to the piano roll, in four tabs:
 - AI mind: presets, ways to play together (it comps while you solo, it solos while you comp...), then a few musical controls (density, harmony, role...), each turning some of the model's knobs on the Jetson
-  (see music_transformer/server.py, "knobs"), the octaves it may play and the scale it keeps to: yours, or one you
-  force it into
+  (see music_transformer/server.py, "knobs"), the octaves it may play, the scale it keeps to (yours, or one you force
+  it into) and its tempo (yours, or one you fix, with a metronome)
 - Your sound, AI sound: yours and the model's in FluidSynth on this laptop (sound.py)
 - Advanced: every knob of the model on its own
 A knob is dimmed while what it shapes is not happening (the server says what the model is doing). Drag a knob up or
@@ -110,6 +110,8 @@ class Knob:
             return f"{value} notes"
         if self.unit == 'program':
             return sound.GM[value]
+        if self.unit == 'bpm':
+            return f"{value} bpm" if value else 'yours'
         if self.unit.startswith('choice:'):
             return self.unit[7:].split('/')[value].replace('_', ' ')
         if self.unit in ('octave_from', 'octave_to'):
@@ -288,7 +290,7 @@ class Panel:
         self.mind = Mind(address, mind_file)
         waiting = f"waiting for the model at {address}"
         lit = lambda: 'lit knobs shape what it plays now' if self.mind.knobs else waiting
-        register = lambda: [self.mind.knobs[n] for n in ('lowest', 'highest', 'root', 'scale')
+        register = lambda: [self.mind.knobs[n] for n in ('lowest', 'highest', 'root', 'scale', 'bpm', 'metronome')
                               if n in self.mind.knobs]
         yours, its = sound_knobs(engine, sound.YOU), sound_knobs(engine, sound.AI)
         # title, colour, knobs, status line, whether its knobs wait for their moment

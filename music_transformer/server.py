@@ -9,6 +9,8 @@ One line per message, times in seconds since the connection opened:
     client -> server   "off <onset> <pitch> <duration>"  the key you pressed at <onset> stopped sounding (pedal and all)
     server -> client   "note <onset> <duration> <pitch> <hand>"   the model's next note, of its left or right hand
     server -> client   "cut <onset>"                     forget the model's notes from <onset> on: they are resampled
+    server -> client   "tempo <bpm> <metronome>"         the tempo it keeps to (0: yours), its beats on k * 60 / bpm,
+                                                         and whether to click them (1); at once and whenever turned
 One duo at a time; a second connection waits for the first to close.
 
 A connection that starts with "knobs" turns the duo's knobs (duo.KNOBS) instead, while a duo plays or before:
@@ -47,7 +49,7 @@ def ms(seconds):
 def make_handler(generator, left=None):
     lock = threading.Lock()
     knobs = {name: default for name, (default, *_) in KNOBS.items()}   # as last turned, for this duo and the next
-    playing = []                                                         # the session of the duo now playing
+    playing = []                                                         # (session, inbox) of the duo now playing
 
     class Handler(socketserver.StreamRequestHandler):
         disable_nagle_algorithm = True  # every note goes out at once
@@ -71,8 +73,10 @@ def make_handler(generator, left=None):
                     if kind == 'set' and len(values) == 2 and values[0] in KNOBS:
                         name = values[0]
                         knobs[name] = knob(name, float(values[1]))
-                        for session in playing:
+                        for session, inbox in playing:
                             session.turn(**{name: knobs[name]})
+                            if name in ('bpm', 'metronome'):
+                                inbox.put(('tempo',))
                         print(f"duo: {name} = {knobs[name]}")
             except (ConnectionResetError, ValueError) as e:
                 print(f"duo: bad knob ({e})")
@@ -81,7 +85,7 @@ def make_handler(generator, left=None):
             idle = {'mode': 'listening', 'key': None, 'chord': None, 'bpm': None, 'active': sorted(ALWAYS)}
             while True:
                 try:
-                    state = playing[0].state() if playing else idle
+                    state = playing[0][0].state() if playing else idle
                 except Exception:          # the duo moved on while we read it; the next report will do
                     state = None
                 try:
@@ -100,7 +104,8 @@ def make_handler(generator, left=None):
                 session = DuoSession(generator.model, generator.device, started=opened, **hands, **knobs)
                 heard, played, shown = 0, 0, None
                 sampling, answers, since = [], [], None   # seconds to sample each note; from your note to its next
-                playing.append(session)
+                playing.append((session, inbox))
+                inbox.put(('tempo',))
                 try:
                     while True:
                         # your keys come first; otherwise sample on, or wait while far enough ahead
@@ -111,7 +116,9 @@ def make_handler(generator, left=None):
                             note = False
                         if note is None:
                             break
-                        if note and note[0] == 'off':
+                        if note and note[0] == 'tempo':
+                            self.wfile.write(f"tempo {session.bpm} {session.metronome}\n".encode())
+                        elif note and note[0] == 'off':
                             session.release(*note[1:])
                         elif note:
                             heard += 1
@@ -135,7 +142,7 @@ def make_handler(generator, left=None):
                 except (BrokenPipeError, ConnectionResetError):
                     pass
                 finally:
-                    playing.remove(session)
+                    playing.remove((session, inbox))
                 print(f"duo: ended, heard {heard} notes, played {played}")
                 if sampling:
                     print(f"duo: a note took {ms(sampling)} to sample; its first after yours went out {ms(answers)} "

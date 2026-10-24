@@ -105,6 +105,16 @@ class ListenerTest(unittest.TestCase):
         self.assertIsNone(listener.forced_name())
         self.assertEqual(listener.name(listener.key()[0]), 'C major')
 
+    def test_a_tempo_you_fix_takes_the_place_of_your_pulse(self):
+        listener = Listener()
+        end = play(listener, C_MAJOR, start=0.1, step=0.3)
+        listener.fix(100)
+        self.assertEqual(listener.pulse(end), (0.3, 0.0))
+        self.assertEqual(listener.beat(0.3), 0.6)
+        listener.fix(0)
+        self.assertAlmostEqual(listener.pulse(end)[0], 0.3)
+        self.assertAlmostEqual(listener.beat(0.3), 0.6)
+
 
 if __name__ == '__main__':
     unittest.main()

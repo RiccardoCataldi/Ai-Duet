@@ -85,6 +85,7 @@ class Listener:
         self.releases = False   # whether you say when your notes stop sounding (main.py does)
         self.move = MOVE
         self.forced = None      # (root, scale in FORCED) it keeps to instead of your key
+        self.tempo = None       # seconds a beat of a tempo you fix lasts, its beats from time 0 on; None: your pulse
 
     def stay(self, stay):
         """Sets STAY for this listener."""
@@ -93,6 +94,10 @@ class Listener:
     def force(self, root, scale):
         """Keeps it to `scale` (in FORCED) from `root` (0 = C) instead of your key; None for your key again."""
         self.forced = (root % 12, scale) if scale else None
+
+    def fix(self, bpm):
+        """Keeps it to `bpm` instead of your pulse; 0 for your pulse again."""
+        self.tempo = 60 / bpm if bpm else None
 
     def hear(self, onset, duration, pitch):
         """Your note. Once release() has been heard, it sounds on past `duration` until its own release() comes."""
@@ -193,7 +198,10 @@ class Listener:
         return None
 
     def pulse(self, now):
-        """(tatum, phase) in seconds: your onsets fall on phase + k * tatum. None until your rhythm is regular."""
+        """(tatum, phase) in seconds: your onsets fall on phase + k * tatum. None until your rhythm is regular; the
+        eighths of a tempo you fix."""
+        if self.tempo:
+            return self.tempo / 2, 0.0
         onsets = sorted({round(n[0], 2) for n in self.notes if n[0] > now - PULSE_S})
         if len(onsets) < 6:
             return None
@@ -206,9 +214,8 @@ class Listener:
         phase = cmath.phase(sum(cmath.exp(2j * math.pi * t / tatum) for t in onsets)) / (2 * math.pi) * tatum
         return tatum, phase % tatum
 
-    @staticmethod
-    def beat(tatum):
-        return tatum * math.ceil(0.4 / tatum)
+    def beat(self, tatum):
+        return self.tempo or tatum * math.ceil(0.4 / tatum)
 
     def phrase(self, now):
         """Pitches of your last phrase, once a rest has ended it; [] while you are still playing it."""

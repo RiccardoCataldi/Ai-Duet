@@ -1,3 +1,4 @@
+import math
 import os
 import random
 import signal
@@ -33,6 +34,11 @@ TOP, INNER = 1.08, 0.82  # in a chord the top voice sings and the inner voices f
 CONTOUR = 0.2            # its line swells as it rises and falls back as it descends: this much from lowest to highest
 CONTOUR_NOTES = 16       # its last notes the contour is measured against
 HUMAN = 4                # velocity a little different every time, as a hand never strikes twice the same
+# the metronome of a tempo you fix (the bpm and metronome knobs): General MIDI percussion, a bar of BAR beats
+DRUMS = 9
+CLICK = (76, 77)         # hi wood block on the first beat of a bar, low wood block on the others
+CLICK_VELOCITY = 70
+BAR = 4
 
 
 def dynamics(pitch, hand, together, line, level, accompanying, rng=random):
@@ -76,6 +82,8 @@ class Duo:
         self.sounding = {}             # pitch -> (onset, offset, velocity) of the model's notes
         self.line = deque(maxlen=CONTOUR_NOTES)   # its right hand's last pitches
         self.late = 0                  # the model's notes that came later than LATE_S, skipped
+        self.bpm, self.metronome = 0, False   # the tempo the model keeps to (0: yours) and whether we click it
+        self.click_at = None           # when the metronome's next beat falls
 
     def note_on(self, pitch, velocity, now):
         with self.lock:
@@ -125,10 +133,14 @@ class Duo:
             elif kind == 'cut':
                 cut = self.started + float(values[0])
                 self.pending = [n for n in self.pending if n[0] < cut]
+            elif kind == 'tempo':
+                self.bpm, self.metronome, self.click_at = float(values[0]), values[1] == '1', None
 
     def tick(self, now):
-        """Starts and stops the model's notes that are due."""
+        """Starts and stops the model's notes that are due, and clicks the metronome."""
         with self.lock:
+            if self.metronome and self.bpm:
+                self._click(now)
             for pitch, (onset, offset, _) in list(self.sounding.items()):
                 if offset <= now:
                     self._release(pitch, now)
@@ -147,6 +159,18 @@ class Duo:
                     self.line.append(pitch)
                 self.midi_rec.play_midi_message([0x90, pitch, velocity], is_generated=True)
                 self.sounding[pitch] = (now, now + max(duration * RING, duration + RING_S), velocity)
+
+    def _click(self, now):
+        """Clicks the beat that is due: the model's beats fall on k * 60 / bpm seconds after the connection opened."""
+        beat = 60 / self.bpm
+        if self.click_at is not None and now >= self.click_at:
+            if now - self.click_at < LATE_S:
+                click = CLICK[round((self.click_at - self.started) / beat) % BAR > 0]
+                self.midi_rec.play_midi_message([0x90, click, CLICK_VELOCITY], channel=DRUMS)
+                self.midi_rec.play_midi_message([0x80, click, 0], channel=DRUMS)
+            self.click_at = None
+        if self.click_at is None:
+            self.click_at = self.started + math.floor((now - self.started) / beat + 1) * beat
 
     def stop(self, now):
         with self.lock:
