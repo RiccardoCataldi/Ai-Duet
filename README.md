@@ -23,6 +23,8 @@ The video at the top: a one-minute improvisation, played live on the Jetson duo:
 - [duo-c-major.ogg](samples/duo/duo-c-major.ogg): the audio alone (open *View raw* to play it in the browser)
 - [duo-c-major.mid](samples/duo/duo-c-major.mid): the MIDI (track 1 is the human, track 2 the model)
 
+[duo-you-comp-it-solos.mp4](samples/duo/duo-you-comp-it-solos.mp4): 20 seconds of another duo, both on piano: the human plays low chords and the model improvises over them, up high, keeping clear of their hands (the **it solos** preset of the knobs).
+
 The audio is the saved MIDI rendered with the same FluidSynth settings as `run_duet.sh`, and the video is the piano roll drawn over it. `sound.py bake` first puts in the sound the duo was played with (instruments, envelopes, reverb sends and the delay's echoes), which `main.py` saves next to it:
 ```bash
 python sound.py bake generated/<time>.mid duo-baked.mid
@@ -39,7 +41,7 @@ python pianoroll.py video generated/<time>.mid --audio duo.ogg -o duo.mp4
 
 At the top it says what the model hears and does: your key, the chord you play, your tempo once it has found your pulse, and whether it is accompanying you, answering your phrase or playing on its own. Beside it are knobs (`knobs.py`) to turn while you play, in four tabs. Drag a knob up or down (hold Shift to turn it finely) or use the wheel over it; a double click puts it back, and hovering says what it does. A knob is dimmed while what it shapes is not happening: `dialogue` while you play, `role` while you rest, `groove` until it has found your pulse.
 
-- **AI mind**: musical controls, each with its two ends; each turns some of the model's knobs on the Jetson along a line whose middle is the duo's default:
+- **AI mind**: presets on top, ways to play together that set the controls and knobs below at once (`PRESETS` in `knobs.py`; the one playing is lit, hovering says what it does): **duet** (the defaults), **call & response** (it keeps quiet while you play and answers each phrase), **it comps** (it plays the harmony low with both hands: you improvise), **it solos** (you play the harmony, it improvises a line up high), **free**. Then musical controls, each with its two ends; each turns some of the model's knobs on the Jetson along a line whose middle is the duo's default:
 
   | Control | From ... to | Turns |
   |---|---|---|
@@ -52,7 +54,7 @@ At the top it says what the model hears and does: your key, the chord you play, 
   | focus | on you ... on itself | `memory` |
   | key follow | steady ... quick | `stay` |
 
-  and `lowest`, `highest`: the octaves it may play. The model's knobs are kept in `~/.config/ai-duet/mind.json` and given back to the server whenever it restarts; the server log shows each turn (`duo: min_step = 32`).
+  and `lowest`, `highest`: the octaves it may play; `root`, `scale`: the scale it keeps to, **yours** (the key it hears you in) or one you force it into, e.g. C major, D harmonic minor, F minor pentatonic (the top of the piano roll then names it instead of your key). The model's knobs are kept in `~/.config/ai-duet/mind.json` and given back to the server whenever it restarts; the server log shows each turn (`duo: min_step = 32`).
 - **Your sound** and **AI sound** (`sound.py`, in FluidSynth on the laptop): the General MIDI instrument, volume, where it sits from left to right (pan: you on the left, the model on the right, as two pianos on a record), the envelope (attack, decay, sustain and release, as how many times longer than the instrument's own, through SoundFont NRPNs), the reverb send, and a delay: its time, how loud the first echo is (0 turns it off) and how much each echo keeps of the one before. FluidSynth has no delay, so the echoes are MIDI notes, played on channels 2 (yours) and 3 (the model's). The sound is kept in `~/.config/ai-duet/sound.json` across sessions.
 - **Advanced**: every knob of the model on its own (see *Tuning by ear* below).
 
@@ -141,6 +143,7 @@ The session tests need torch, so run them there: `python -m unittest tests.test_
 - `MEMORY`: how much of its own playing it remembers (shorter = listens to you more)
 - `temperature` and `top_p` in `DuoSession`: how adventurous its choices are
 - `lowest`, `highest` (knobs only, in `KNOBS`): the octaves it may play, from C of the lowest to B of the highest (C4 is middle C); the piano roll draws them as a line over the keys
+- `root`, `scale` (knobs only, in `KNOBS`; the scales are `FORCED` in `music_transformer/listener.py`): a scale it keeps to instead of your key, major, the minors and modes, the pentatonics and blues; outside it, it takes `FORCE` (5.0) from a pitch at least, whatever `out_of_key` says, and colours your chord only with tensions inside it
 
 ## Instrument Selection
 

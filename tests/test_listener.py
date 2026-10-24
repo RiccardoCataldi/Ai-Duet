@@ -92,6 +92,19 @@ class ListenerTest(unittest.TestCase):
         self.assertEqual(listener.phrase(end - 0.2), [])
         self.assertEqual(listener.phrase(end + 1.0), C_MAJOR)
 
+    def test_a_forced_scale_takes_the_place_of_your_key_and_its_tensions_too(self):
+        listener = Listener()
+        end = play(listener, C_MAJOR)
+        listener.force(5, 'minor_pentatonic')
+        self.assertEqual(listener.forced_name(), 'F minor pentatonic')
+        self.assertEqual(list(listener.in_key().nonzero()[0]), [0, 3, 5, 8, 10])   # F Ab Bb C Eb
+        bias = listener.bias(end, 1.0, 1.0, 0.0)
+        self.assertLessEqual(bias[64], -4.0)   # E: in your key, outside the forced scale
+        self.assertGreater(bias[60], bias[62])
+        listener.force(0, None)
+        self.assertIsNone(listener.forced_name())
+        self.assertEqual(listener.name(listener.key()[0]), 'C major')
+
 
 if __name__ == '__main__':
     unittest.main()

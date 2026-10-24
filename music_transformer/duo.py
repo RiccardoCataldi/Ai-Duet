@@ -14,7 +14,7 @@ from anticipation.config import CONTEXT_SIZE, MAX_DUR, MAX_PITCH, MAX_TIME, TIME
 from anticipation.vocab import AUTOREGRESS, DUR_OFFSET, NOTE_OFFSET, TIME_OFFSET
 from anticipation.sample import safe_logits, nucleus
 
-from music_transformer.listener import STAY, Listener, hands
+from music_transformer.listener import FORCED, NAMES, STAY, Listener, hands
 
 LOOKAHEAD = 100   # ticks the model plays ahead of now (1 s)
 MARGIN = 15       # ticks: a new note of the model sounds no earlier than this, to cover sampling and the network
@@ -84,6 +84,9 @@ KNOBS = {
     'top_p': (0.98, 0.80, 1.0, '', "how many unlikely notes it still considers"),
     'lowest': (0, 0, 8, 'octave_from', "the lowest octave it may play"),
     'highest': (8, 0, 8, 'octave_to', "the highest octave it may play"),
+    'root': (0, 0, 11, 'choice:' + '/'.join(NAMES), "the root of the scale you force it into"),
+    'scale': (0, 0, len(FORCED), 'choice:' + '/'.join(['yours', *FORCED]),
+              "the scale it keeps to: your key as it hears it, or one you force it into"),
 }
 # what it is doing, and the knobs that shape its notes then; the others wait for their moment
 IN_EFFECT = {
@@ -93,7 +96,7 @@ IN_EFFECT = {
     'alone': {'min_step', 'solo_chord', 'lead', 'answer'},         # you rest, and it has answered
 }
 ALWAYS = {'out_of_key', 'chord_tone', 'tension', 'stay', 'no_repeat', 'memory', 'max_rest', 'temperature', 'top_p',
-          'lowest', 'highest', 'hands'}
+          'lowest', 'highest', 'hands', 'scale'}
 
 
 def knob(name, value):
@@ -123,11 +126,14 @@ class DuoSession:
             setattr(self, name, knob(name, value))
         if 'stay' in knobs:
             self.listener.stay(self.stay)
+        if 'root' in knobs or 'scale' in knobs:
+            self.listener.force(self.root, list(FORCED)[self.scale - 1] if self.scale else None)
 
     def state(self):
         """What it hears and what it is doing: {'mode', 'key', 'chord', 'bpm', 'active': the knobs in effect}."""
         if self.base is None or self.heard_at is None:
-            return {'mode': 'listening', 'key': None, 'chord': None, 'bpm': None, 'active': sorted(ALWAYS)}
+            return {'mode': 'listening', 'key': self.listener.forced_name(), 'chord': None, 'bpm': None,
+                    'active': sorted(ALWAYS)}
         now = self.now()
         at = self._seconds(now)
         if now - self.heard_at < PLAYING:
@@ -140,7 +146,9 @@ class DuoSession:
         chord = self.listener.chord(at)
         pulse = self.listener.pulse(at)
         active = ALWAYS | IN_EFFECT[mode] | ({'grid'} if pulse else set()) | ({'left_step'} if self.hands == 2 else set())
-        return {'mode': mode, 'key': self.listener.name(key) if sure > 0.3 else None,
+        active = active - {'stay'} | {'root'} if self.scale else active   # forced: your key no longer counts
+        heard = self.listener.name(key) if sure > 0.3 else None
+        return {'mode': mode, 'key': self.listener.forced_name() or heard,
                 'chord': self.listener.chord_label(at) if chord else None,
                 'bpm': round(60 / self.listener.beat(pulse[0])) if pulse else None, 'active': sorted(active)}
 

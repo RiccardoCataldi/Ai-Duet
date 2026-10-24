@@ -65,6 +65,25 @@ class MindTest(unittest.TestCase):
         self.assertEqual({name: knob.value for name, knob in served.items()}, {'space': 30, 'apart': 0.0, 'lead': 6.0})
         self.assertEqual(again.saved['knobs'], {'space': 30})   # it goes on following its control
 
+    def test_a_preset_sets_its_controls_and_knobs_and_the_next_one_puts_back_what_it_leaves_out(self):
+        self.mind.knobs['space'].value = 90
+        presets = {preset[0]: preset for preset in self.mind.presets()}
+        self.mind.play(presets['call & response'])
+        self.assertEqual((self.macro('dialogue').value, self.mind.knobs['space'].value), (1.0, 150))
+        self.assertTrue(self.mind.playing(presets['call & response']))
+        self.mind.play(presets['it solos'])
+        self.assertAlmostEqual(self.mind.knobs['space'].value, knobs.along((150, 50, 15), 0.8))   # density's, again
+        self.assertEqual(self.macro('dialogue').value, 0.3)
+        self.assertFalse(self.mind.playing(presets['call & response']))
+        self.mind.play(presets['duet'])
+        self.assertEqual(self.mind.knobs['space'].value, 50)
+        self.assertTrue(all(m.value == 0.5 for m in self.mind.macros))
+
+    def test_a_choice_shows_its_name(self):
+        scale = knobs.Knob('scale', 3, 0, 3, 0, 'choice:yours/major/natural_minor/harmonic_minor', '', True, print)
+        self.assertEqual(scale.shown(), 'harmonic minor')
+        self.assertEqual(scale.step(), 1)
+
 
 class DummySocket:
     def sendall(self, data):

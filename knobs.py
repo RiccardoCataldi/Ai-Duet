@@ -1,7 +1,8 @@
 """
 Knobs on screen next to the piano roll, in four tabs:
-- AI mind: a few musical controls (density, harmony, role...), each turning some of the model's knobs on the Jetson
-  (see music_transformer/server.py, "knobs"), and the octaves it may play
+- AI mind: presets, ways to play together (it comps while you solo, it solos while you comp...), then a few musical controls (density, harmony, role...), each turning some of the model's knobs on the Jetson
+  (see music_transformer/server.py, "knobs"), the octaves it may play and the scale it keeps to: yours, or one you
+  force it into
 - Your sound, AI sound: yours and the model's in FluidSynth on this laptop (sound.py)
 - Advanced: every knob of the model on its own
 A knob is dimmed while what it shapes is not happening (the server says what the model is doing). Drag a knob up or
@@ -48,6 +49,23 @@ MACROS = [
     ('key follow', ('steady', 'quick'), "how soon it follows you into a new key",
      {'stay': (0.995, 0.97, 0.85)}),
 ]
+# ways to play together: name, what it does, its musical controls (0 to 1; one left out stands in the middle) and the
+# model's knobs it sets (one any other preset sets and it leaves out goes back to its default)
+PRESETS = [
+    ('duet', "the duo's defaults: it comps while you play, answers your phrases and plays on when you rest", {}, {}),
+    ('call & response', "it keeps quiet while you play, then answers each phrase soon, close to your intervals, and "
+                        "takes the melody",
+     {'dialogue': 1.0, 'role': 0.75, 'density': 0.6, 'focus': 0.2}, {'space': 150, 'chord': 1, 'hands': 1}),
+    ('it comps', "it plays the harmony, low and steady with both hands, and keeps comping when you rest: you improvise",
+     {'role': 0.0, 'dialogue': 0.0, 'density': 0.4, 'harmony': 0.4, 'groove': 1.0, 'risk': 0.3, 'key follow': 0.3},
+     {'chord': 4, 'solo_chord': 4, 'hands': 2, 'lowest': 2, 'highest': 4}),
+    ('it solos', "you play the harmony, it improvises a line over it, up high",
+     {'role': 0.85, 'dialogue': 0.3, 'density': 0.8, 'harmony': 0.6, 'groove': 0.7, 'risk': 0.75, 'focus': 0.8},
+     {'chord': 1, 'solo_chord': 1, 'hands': 1, 'lowest': 5, 'highest': 7}),
+    ('free', "outside your key and off your pulse, surprising and dense: free improvisation together",
+     {'harmony': 1.0, 'risk': 1.0, 'groove': 0.0, 'density': 0.75, 'focus': 0.8, 'key follow': 1.0}, {}),
+]
+PRESET_KNOBS = {name for *_, turns in PRESETS for name in turns}
 MODES = {'listening': 'waiting for you to play', 'accompanying': 'accompanying you', 'answering': 'answering you',
          'alone': 'playing on its own'}
 
@@ -92,6 +110,8 @@ class Knob:
             return f"{value} notes"
         if self.unit == 'program':
             return sound.GM[value]
+        if self.unit.startswith('choice:'):
+            return self.unit[7:].split('/')[value].replace('_', ' ')
         if self.unit in ('octave_from', 'octave_to'):
             return f"{'C' if self.unit == 'octave_from' else 'B'}{value}"
         if self.unit == 'pan':
@@ -207,6 +227,30 @@ class Mind:
         self.saved['macros'][macro.name] = macro.value
         self._save()
 
+    def presets(self):
+        """(name, what, its musical controls, its knobs) of each preset, every control and knob it sets filled in: a
+        knob it leaves out stands where its control puts it, or at its default."""
+        presets = []
+        for name, what, macros, turns in PRESETS:
+            macros = {m.name: macros.get(m.name, 0.5) for m in self.macros}
+            free = {n: along(anchors, macros[m]) for m, knobs in self.turns.items() for n, anchors in knobs.items()}
+            presets.append((name, what, macros, {n: turns.get(n, free.get(n, self.knobs[n].default))
+                                                 for n in PRESET_KNOBS if n in self.knobs}))
+        return presets
+
+    def play(self, preset):
+        _, _, macros, turns = preset
+        for macro in self.macros:
+            macro.set(macros[macro.name])
+        for name, value in turns.items():
+            self.knobs[name].set(value)
+
+    def playing(self, preset):
+        """Whether every control and knob stands where `preset` sets them."""
+        _, _, macros, turns = preset
+        return (all(abs(m.value - macros[m.name]) < 0.01 for m in self.macros) and
+                all(abs(self.knobs[n].value - v) < 0.01 for n, v in turns.items()))
+
     def _save(self):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         with open(self.path, 'w') as f:
@@ -244,7 +288,8 @@ class Panel:
         self.mind = Mind(address, mind_file)
         waiting = f"waiting for the model at {address}"
         lit = lambda: 'lit knobs shape what it plays now' if self.mind.knobs else waiting
-        register = lambda: [self.mind.knobs[n] for n in ('lowest', 'highest') if n in self.mind.knobs]
+        register = lambda: [self.mind.knobs[n] for n in ('lowest', 'highest', 'root', 'scale')
+                              if n in self.mind.knobs]
         yours, its = sound_knobs(engine, sound.YOU), sound_knobs(engine, sound.AI)
         # title, colour, knobs, status line, whether its knobs wait for their moment
         self.tabs = [('AI mind', AI, lambda: (self.mind.macros if self.mind.knobs else []) + register(), lit, True),
@@ -260,6 +305,8 @@ class Panel:
         self.last_click = (None, 0)
         self.places = {}          # knob name -> (centre, radius), from the last draw
         self.tab_places = []      # rects of the tabs, from the last draw
+        self.preset_places = []   # (preset, rect) of the presets, from the last draw
+        self.preset_hover = None
 
     def knobs(self):
         return self.tabs[self.tab][2]()
@@ -279,6 +326,10 @@ class Panel:
                 if rect.collidepoint(pos[0] - origin[0], pos[1] - origin[1]):
                     self.tab, self.hover, self.held = i, None, None
                     return
+            preset = self._preset_at(pos, origin)
+            if preset:
+                self.mind.play(preset)
+                return
             knob = self._at(pos, origin)
             if knob is None:
                 return
@@ -293,10 +344,15 @@ class Panel:
             self.held = None
         elif event.type == pygame.MOUSEMOTION:
             self.hover = self._at(pos, origin)
+            self.preset_hover = self._preset_at(pos, origin)
             if self.held:
                 knob, y, start = self.held
                 fine = 5 if pygame.key.get_mods() & pygame.KMOD_SHIFT else 1
                 knob.set(start + (y - pos[1]) / (DRAG * fine) * (knob.high - knob.low))
+
+    def _preset_at(self, pos, origin):
+        return next((preset for preset, rect in self.preset_places
+                     if rect.collidepoint(pos[0] - origin[0], pos[1] - origin[1])), None)
 
     def _at(self, pos, origin):
         for knob in self.knobs():
@@ -314,16 +370,18 @@ class Panel:
         _, accent, _, status, waits = self.tabs[self.tab]
         self._tabs(surface)
         surface.blit(self.small.render(status(), True, DIM), (24, 58))
+        self.preset_places = []
+        top = self._presets(surface, accent, width) + 46 if self.tab == 0 and self.mind.knobs else 116
         knobs = self.knobs()
         cell_h = 104
-        rows = max(1, (height - 116 - 84) // cell_h + 1)   # the rows that fit above the caption
+        rows = max(1, (height - top - 84) // cell_h + 1)   # the rows that fit above the caption
         columns = max(COLUMNS, math.ceil(len(knobs) / rows))
         cell_w = (width - 24) / columns
         radius = 24 if columns == COLUMNS else 20
         self.places = {}
         for i, knob in enumerate(knobs):
             col, row = i % columns, i // columns
-            centre = (round(12 + cell_w * (col + 0.5)), round(116 + row * cell_h))
+            centre = (round(12 + cell_w * (col + 0.5)), round(top + row * cell_h))
             self.places[knob.name] = (centre, radius)
             lit = knob is self.hover or (self.held and self.held[0] is knob)
             active = not waits or self.mind.active(knob)
@@ -331,6 +389,25 @@ class Panel:
         shown = (self.held[0] if self.held else None) or self.hover
         if shown:
             self._caption(surface, self._explain(shown), height - 84, width - 48)
+        elif self.preset_hover and self.preset_places:
+            name, what, *_ = self.preset_hover
+            self._caption(surface, f"{name}: {what}", height - 84, width - 48)
+
+    def _presets(self, surface, accent, width):
+        """Draws the presets as a row of buttons, wrapping, the one playing lit; returns the bottom of the last row."""
+        x, y = 24, 80
+        for preset in self.mind.presets():
+            rect = pygame.Rect(x, y, self.small.size(preset[0])[0] + 20, 24)
+            if rect.right > width - 24 and x > 24:
+                x, y = 24, y + 30
+                rect.topleft = (x, y)
+            playing = self.mind.playing(preset)
+            pygame.draw.rect(surface, accent if playing else BODY, rect, border_radius=12)
+            pygame.draw.rect(surface, accent if playing or preset == self.preset_hover else EDGE, rect, 1, border_radius=12)
+            surface.blit(self.small.render(preset[0], True, PANEL if playing else TEXT), (rect.x + 10, rect.y + 6))
+            self.preset_places.append((preset, rect))
+            x = rect.right + 6
+        return y + 24
 
     def _explain(self, knob):
         if knob.unit != 'macro':

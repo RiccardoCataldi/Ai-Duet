@@ -12,6 +12,13 @@ NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B']
 MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]   # Krumhansl-Kessler, from C
 MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
 SCALES = ((0, 2, 4, 5, 7, 9, 11), (0, 2, 3, 5, 7, 8, 10, 11))                      # major, minor with both sevenths
+# the scales you may force it into instead of your key, in semitones from their root
+FORCED = {'major': (0, 2, 4, 5, 7, 9, 11), 'natural_minor': (0, 2, 3, 5, 7, 8, 10),
+          'harmonic_minor': (0, 2, 3, 5, 7, 8, 11), 'melodic_minor': (0, 2, 3, 5, 7, 9, 11),
+          'dorian': (0, 2, 3, 5, 7, 9, 10), 'phrygian': (0, 1, 3, 5, 7, 8, 10), 'lydian': (0, 2, 4, 6, 7, 9, 11),
+          'mixolydian': (0, 2, 4, 5, 7, 9, 10), 'locrian': (0, 1, 3, 5, 6, 8, 10),
+          'major_pentatonic': (0, 2, 4, 7, 9), 'minor_pentatonic': (0, 3, 5, 7, 10), 'blues': (0, 3, 5, 6, 7, 10)}
+FORCE = 5.0      # the least logit taken from a pitch class outside a forced scale
 # the chords of jazz harmony: C6 is Am7 and Cm6 is Am7b5 (and dim7 is itself four times), told apart by the bass
 CHORDS = {'': (0, 4, 7), 'm': (0, 3, 7), '7': (0, 4, 7, 10), 'm7': (0, 3, 7, 10), 'dim': (0, 3, 6),
           'maj7': (0, 4, 7, 11), '6': (0, 4, 7, 9), 'm6': (0, 3, 7, 9), 'm7b5': (0, 3, 6, 10), 'dim7': (0, 3, 6, 9),
@@ -77,10 +84,15 @@ class Listener:
         self.held = set() # (onset, pitch) of your notes still sounding: their duration is only a guess until release()
         self.releases = False   # whether you say when your notes stop sounding (main.py does)
         self.move = MOVE
+        self.forced = None      # (root, scale in FORCED) it keeps to instead of your key
 
     def stay(self, stay):
         """Sets STAY for this listener."""
         self.move = _transitions(stay)
+
+    def force(self, root, scale):
+        """Keeps it to `scale` (in FORCED) from `root` (0 = C) instead of your key; None for your key again."""
+        self.forced = (root % 12, scale) if scale else None
 
     def hear(self, onset, duration, pitch):
         """Your note. Once release() has been heard, it sounds on past `duration` until its own release() comes."""
@@ -104,8 +116,16 @@ class Listener:
     def name(key):
         return f"{NAMES[key % 12]} {'minor' if key >= 12 else 'major'}"
 
+    def forced_name(self):
+        """The scale it is forced into, e.g. 'F minor pentatonic', or None."""
+        return f"{NAMES[self.forced[0]]} {self.forced[1].replace('_', ' ')}" if self.forced else None
+
     def in_key(self):
-        """For each pitch class, how likely it belongs to your key: while you modulate, both keys count."""
+        """For each pitch class, how likely it belongs to your key (while you modulate, both keys count), or 1 or 0
+        to the scale it is forced into."""
+        if self.forced:
+            root, scale = self.forced
+            return np.array([(pc - root) % 12 in FORCED[scale] for pc in range(12)], float)
         return self.belief @ MEMBER
 
     def chord(self, now):
@@ -152,10 +172,14 @@ class Listener:
 
     def bias(self, now, chord_tone, tension, out_of_key):
         """For each of the 128 pitches, how much more a partner would play it now: the tones of your chord and its
-        tensions, less the pitches outside your key (a tension is not taken as one)."""
+        tensions, less the pitches outside your key (a tension is not taken as one); in a forced scale, by FORCE at
+        least, its tensions included."""
         in_key, harmony = self.in_key(), self.harmony(now)
         chord = harmony[2] if harmony else set()
         colours = {(harmony[0] + step) % 12 for step in TENSIONS[harmony[1]]} - chord if harmony else set()
+        if self.forced:
+            colours &= set(np.flatnonzero(in_key))
+            out_of_key = max(out_of_key, FORCE)
         return np.array([chord_tone * (p % 12 in chord) + tension * (p % 12 in colours)
                          - out_of_key * (1 - in_key[p % 12]) * (p % 12 not in colours) for p in range(128)])
 
