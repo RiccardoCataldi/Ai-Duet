@@ -23,7 +23,9 @@ The video at the top: a one-minute improvisation, played live on the Jetson duo:
 - [duo-c-major.ogg](samples/duo/duo-c-major.ogg): the audio alone (open *View raw* to play it in the browser)
 - [duo-c-major.mid](samples/duo/duo-c-major.mid): the MIDI (track 1 is the human, track 2 the model)
 
-[duo-you-comp-it-solos.mp4](samples/duo/duo-you-comp-it-solos.mp4): 20 seconds of another duo, both on piano: the human plays low chords and the model improvises over them, up high, keeping clear of their hands (the **it solos** preset of the knobs).
+https://github.com/user-attachments/assets/bd7c846d-0ae0-4ff4-a644-22b97c01049c
+
+20 seconds of another duo, both on piano ([duo-you-comp-it-solos.mp4](samples/duo/duo-you-comp-it-solos.mp4) in the repo): the human plays low chords and the model improvises over them, up high, keeping clear of their hands (the **it solos** preset of the knobs).
 
 The audio is the saved MIDI rendered with the same FluidSynth settings as `run_duet.sh`, and the video is the piano roll drawn over it. `sound.py bake` first puts in the sound the duo was played with (instruments, envelopes, reverb sends and the delay's echoes), which `main.py` saves next to it:
 ```bash
@@ -54,7 +56,7 @@ At the top it says what the model hears and does: your key, the chord you play, 
   | focus | on you ... on itself | `memory` |
   | key follow | steady ... quick | `stay` |
 
-  and `lowest`, `highest`: the octaves it may play; `root`, `scale`: the scale it keeps to, **yours** (the key it hears you in) or one you force it into, e.g. C major, D harmonic minor, F minor pentatonic (the top of the piano roll then names it instead of your key). The model's knobs are kept in `~/.config/ai-duet/mind.json` and given back to the server whenever it restarts; the server log shows each turn (`duo: min_step = 32`).
+  and `lowest`, `highest`: the octaves it may play; `root`, `scale`: the scale it keeps to, **yours** (the key it hears you in) or one you force it into, e.g. C major, D harmonic minor, F minor pentatonic (the top of the piano roll then names it instead of your key); `bpm`, `metronome`: the tempo it keeps to, **yours** (the pulse it hears in your playing) or one you fix, and a click on its beats, the first of each bar of four accented (`main.py` plays it, on General MIDI percussion). The model's knobs are kept in `~/.config/ai-duet/mind.json` and given back to the server whenever it restarts; the server log shows each turn (`duo: min_step = 32`).
 - **Your sound** and **AI sound** (`sound.py`, in FluidSynth on the laptop): the General MIDI instrument, volume, where it sits from left to right (pan: you on the left, the model on the right, as two pianos on a record), the envelope (attack, decay, sustain and release, as how many times longer than the instrument's own, through SoundFont NRPNs), the reverb send, and a delay: its time, how loud the first echo is (0 turns it off) and how much each echo keeps of the one before. FluidSynth has no delay, so the echoes are MIDI notes, played on channels 2 (yours) and 3 (the model's). The sound is kept in `~/.config/ai-duet/sound.json` across sessions.
 - **Advanced**: every knob of the model on its own (see *Tuning by ear* below).
 
@@ -144,6 +146,7 @@ The session tests need torch, so run them there: `python -m unittest tests.test_
 - `temperature` and `top_p` in `DuoSession`: how adventurous its choices are
 - `lowest`, `highest` (knobs only, in `KNOBS`): the octaves it may play, from C of the lowest to B of the highest (C4 is middle C); the piano roll draws them as a line over the keys
 - `root`, `scale` (knobs only, in `KNOBS`; the scales are `FORCED` in `music_transformer/listener.py`): a scale it keeps to instead of your key, major, the minors and modes, the pentatonics and blues; outside it, it takes `FORCE` (5.0) from a pitch at least, whatever `out_of_key` says, and colours your chord only with tensions inside it
+- `bpm`, `metronome` (knobs only, in `KNOBS`): a tempo it keeps to instead of your pulse, its beats `60 / bpm` seconds apart from when `main.py` connected, and the click of them in `main.py` (`CLICK`, `CLICK_VELOCITY`, `BAR`); `grid` says how far off its eighths its onsets may land
 
 ## Instrument Selection
 
