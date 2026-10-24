@@ -1,6 +1,6 @@
-https://github.com/user-attachments/assets/c60c41e5-e66a-45cb-8f61-24bca2126761
-
 # duetto
+
+https://github.com/user-attachments/assets/c60c41e5-e66a-45cb-8f61-24bca2126761
 
 Play a MIDI keyboard and a transformer plays a second piano with you, in real time. It listens like a partner: your key, the chord you play, your pulse, your phrases. It comps while you play and takes the melody when you rest.
 
@@ -50,28 +50,6 @@ Controls are sliders (drag them; hold Shift to drag finely) and steppers (click 
 
 Knobs and sound are kept in `~/.config/ai-duet/`.
 
-<details>
-<summary>Make a video of a duo</summary>
+## License
 
-```bash
-python sound.py bake generated/<time>.mid duo-baked.mid
-eval "$(grep -E '^(REVERB|CHORUS)=' run_duet.sh)"
-fluidsynth -ni -g 0.7 $REVERB $CHORUS -T oga -F duo.ogg /usr/share/sounds/sf2/FluidR3_GM.sf2 duo-baked.mid
-python pianoroll.py video generated/<time>.mid --audio duo.ogg -o duo.mp4
-```
-
-For an inline player here, upload it with `gh issue comment 2 --attach duo.mp4` (a recent gh) and put the `user-attachments` URL on a line of its own.
-
-</details>
-
-## Project structure
-
-```
-├── main.py              # The duo on the laptop: your keyboard in, the model's notes out, saved to generated/
-├── music_transformer/   # The model server: duo.py (how it plays), listener.py (how it hears you), server.py
-├── pianoroll.py         # The piano roll, live or as a video
-├── knobs.py             # The knobs beside it
-├── sound.py             # Instruments, envelope, reverb and delay in FluidSynth
-├── run_duet.sh          # Starts everything
-└── tests/
-```
+[PolyForm Noncommercial 1.0.0](LICENSE): use it, change it and share it freely for anything noncommercial (personal, study, research, education, hobby). Commercial use is not allowed. The model itself is the [Anticipatory Music Transformer](https://github.com/jthickstun/anticipation), under its own license.
