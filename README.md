@@ -15,11 +15,10 @@ Above: you play low chords, the model improvises over them (the **it solos** pre
 ## Run it
 
 ```bash
-ssh -t jetson sudo jetson_clocks   # after every Jetson reboot
 ./run_duet.sh                      # on the laptop
 ```
 
-`run_duet.sh` restarts everything: the model server on the Jetson, the SSH tunnel, FluidSynth, `main.py` on the keyboard and the piano roll. Closing the piano roll stops the duo and saves it in `generated/`.
+`run_duet.sh` restarts everything: it copies the model's code to the Jetson and maxes its clocks, then starts the model server there, the SSH tunnel, FluidSynth, `main.py` on the keyboard and the piano roll. Closing the piano roll stops the duo and saves it in `generated/`.
 
 ### Without a Jetson
 
@@ -39,9 +38,10 @@ No MIDI keyboard? A virtual one works: `sudo apt install vmpk`, open it, and pic
 <details>
 <summary>Setup</summary>
 
-- **Jetson** (Orin Nano, JetPack 6): the repo in `~/Ai-Duet` with a venv made with `--system-site-packages` (NVIDIA's torch), the model as safetensors in `~/models/music-medium-800k`, power mode MAXN_SUPER, and `ssh jetson` working with a key.
-- **Laptop**: FluidSynth with a General MIDI soundfont (`SOUNDFONT=path/to.sf2 ./run_duet.sh` for a sampled grand), and a venv with `pip install mido python-rtmidi pygame imageio-ffmpeg`.
-- **Code changes**: the Jetson does not pull from git; copy the files over (`scp music_transformer/*.py jetson:~/Ai-Duet/music_transformer/`) and run `./run_duet.sh` again. The session tests need torch: run `python -m unittest tests.test_duo_session` there.
+- **Jetson** (Orin Nano, JetPack 6): the repo in `~/Ai-Duet` with a venv made with `--system-site-packages` (NVIDIA's torch), the model as safetensors in `~/models/music-medium-800k`, power mode MAXN_SUPER, and `ssh jetson` working with a key. Then once `ssh -t jetson sudo bash Ai-Duet/jetson_setup.sh`: it lets `run_duet.sh` max the clocks, and frees the memory the model needs by running without a desktop and turning off the services the duo does not use (the script says how to undo it).
+- **Laptop**: FluidSynth with FluidR3_GM, and a venv with `pip install mido python-rtmidi pygame imageio-ffmpeg`. A sampled grand at `~/sf2/SalamanderGrandPiano.sf2` ([Salamander Grand Piano](https://freepats.zenvoid.org/Piano/acoustic-grand-piano.html), or another with `SOUNDFONT=path/to.sf2 ./run_duet.sh`) plays the piano over FluidR3_GM's.
+- **Code changes**: `./run_duet.sh` copies `music_transformer/`, `tests/` and `jetson_setup.sh` to the Jetson. The model's tests need torch: run `python -m unittest tests.test_duo_session tests.test_graphed` there.
+- **Speed**: on CUDA the model feeds each token through a CUDA graph ([music_transformer/graphed.py](music_transformer/graphed.py)), the same GPT-2 about three times sooner than in eager mode.
 - **Logs**: `~/amt_server.log` on the Jetson; `duet.log`, `fluidsynth.log`, `pianoroll.log` in `/tmp` on the laptop.
 
 </details>
@@ -52,7 +52,7 @@ No MIDI keyboard? A virtual one works: `sudo apt install vmpk`, open it, and pic
 
 The top of the piano roll says what the model hears (key, chord, tempo) and what it is doing. Keys: F fullscreen, K show or hide the controls, Esc close.
 
-Controls are sliders (drag them; hold Shift to drag finely) and steppers (click the arrows). The wheel or the arrow keys over a control turn it, and the wheel elsewhere scrolls the panel. A double click resets a control, and the bottom of the panel says what the control under the mouse does. A control is dimmed while what it shapes is not happening.
+Controls are sliders (drag them; hold Shift to drag finely) and steppers (click the arrows). The arrow keys or Ctrl and the wheel over a control turn it; the wheel alone scrolls the panel. A double click resets a control, and the bottom of the panel says what the control under the mouse does. A control is dimmed while what it shapes is not happening.
 
 - **AI mind**
   - Presets: **duet**, **call & response**, **it comps** (it plays the harmony, you improvise), **it solos** (you play the harmony, it improvises), **free**

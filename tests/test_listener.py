@@ -47,6 +47,26 @@ class ListenerTest(unittest.TestCase):
         listener.hear(end, 0.2, 66)
         self.assertEqual(listener.name(listener.key()[0]), 'C major')
 
+    def test_the_key_it_says_follows_a_modulation_without_flickering(self):
+        listener = Listener()
+        self.assertIsNone(listener.said_key())
+        end = play(listener, C_MAJOR)
+        said = []
+        for i, pitch in enumerate(EB_MAJOR * 2):
+            listener.hear(end + i * 0.25, 0.2, pitch)
+            said.append(listener.name(listener.said_key()))
+        self.assertLessEqual(said.index('Eb major'), 20)
+        changes = [b for a, b in zip(said, said[1:]) if a != b]
+        self.assertEqual(changes, ['Eb major'])
+
+    def test_it_keeps_saying_a_key_while_no_other_is_sure(self):
+        listener = Listener()
+        play(listener, C_MAJOR)
+        listener.belief[:] = 0
+        listener.belief[[0, 7, 9 + 12]] = [0.3, 0.4, 0.3]   # C major, G major, A minor: none sure
+        listener.hear(10.0, 0.2, 67)
+        self.assertEqual(listener.name(listener.said_key()), 'C major')
+
     def test_it_names_the_chord_you_hold(self):
         listener = Listener()
         play(listener, C_MAJOR)

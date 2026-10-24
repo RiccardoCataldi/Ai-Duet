@@ -148,13 +148,13 @@ class DuoSession:
             mode = 'answering'
         else:
             mode = 'alone'
-        key, sure = self.listener.key()
+        key = self.listener.said_key()
         chord = self.listener.chord(at)
         pulse = self.listener.pulse(at)
         active = ALWAYS | IN_EFFECT[mode] | ({'grid'} if pulse else set()) | ({'left_step'} if self.hands == 2 else set())
         active = active - {'stay'} | {'root'} if self.scale else active   # forced: your key no longer counts
         active |= {'metronome'} if self.bpm else set()
-        heard = self.listener.name(key) if sure > 0.3 else None
+        heard = self.listener.name(key) if key is not None else None
         return {'mode': mode, 'key': self.listener.forced_name() or heard,
                 'chord': self.listener.chord_label(at) if chord else None,
                 'bpm': round(60 / self.listener.beat(pulse[0])) if pulse else None, 'active': sorted(active)}

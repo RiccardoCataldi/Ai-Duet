@@ -124,9 +124,10 @@ def make_handler(generator, left=None):
                             heard += 1
                             since = since or time.perf_counter()
                             cut = session.hear(*note[1:])
-                            key, sure = session.listener.key()
-                            if key != shown and sure > 0.3:
+                            key = session.listener.said_key()
+                            if key != shown:
                                 shown = key
+                                sure = session.listener.belief[key]
                                 print(f"duo: {note[1]:.1f}s you are in {session.listener.name(key)} ({sure:.0%})")
                             if cut is not None:
                                 self.wfile.write(f"cut {cut:.3f}\n".encode())

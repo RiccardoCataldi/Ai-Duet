@@ -16,7 +16,14 @@ pkill -x fluidsynth
 pkill -f "^ssh -N .*-L 8765:localhost:8765"
 sleep 1
 
-ssh "$HOST" 'pkill -f "^python -u -m music_transformer\.server"; sleep 2
+# the model's code as it is here: the Jetson does not pull from git
+rsync -a --exclude __pycache__ music_transformer tests jetson_setup.sh "$HOST":Ai-Duet/ || echo "could not copy the code to $HOST"
+
+# the clocks at their highest (jetson_setup.sh lets this run without a password), then the model's server
+ssh "$HOST" 'if [ -x /usr/bin/jetson_clocks ]; then
+    sudo -n /usr/bin/jetson_clocks 2>/dev/null || echo "clocks not maxed: run jetson_setup.sh there once"
+  fi
+  pkill -f "^python -u -m music_transformer\.server"; sleep 2
   cd ~/Ai-Duet || exit 1
   . .venv/bin/activate
   HF_HUB_OFFLINE=1 setsid nohup python -u -m music_transformer.server '"$SERVER_ARGS"' > ~/amt_server.log 2>&1 < /dev/null &
@@ -27,10 +34,13 @@ setsid nohup ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -L 876
 # small audio buffers (-z 128 -c 2) keep the keyboard responsive; a big, dark room and a slow chorus warm up the sound
 REVERB="-o synth.reverb.room-size=0.75 -o synth.reverb.damp=0.6 -o synth.reverb.width=1.0 -o synth.reverb.level=0.8"
 CHORUS="-o synth.chorus.depth=6 -o synth.chorus.speed=0.25 -o synth.chorus.level=1.5"
-# the piano is the soundfont's: FluidR3_GM by default; a sampled grand sounds far more like a real one, e.g.
-# SOUNDFONT=~/sf2/SalamanderGrandPiano.sf2 ./run_duet.sh (both players are pianos, on its program 0)
-SOUNDFONT=${SOUNDFONT:-/usr/share/sounds/sf2/FluidR3_GM.sf2}
-setsid nohup fluidsynth -a pipewire -m alsa_seq -i -s -z 128 -c 2 -g 0.7 $REVERB $CHORUS "$SOUNDFONT" > "$LOG/fluidsynth.log" 2>&1 < /dev/null &
+# the instruments are FluidR3_GM's; a sampled grand sounds far more like a real piano, and is loaded over it when
+# there is one (FluidSynth takes a preset from the soundfont loaded last): ~/sf2/SalamanderGrandPiano.sf2, or
+# SOUNDFONT=path/to.sf2 ./run_duet.sh
+GM=/usr/share/sounds/sf2/FluidR3_GM.sf2
+SOUNDFONT=${SOUNDFONT:-$HOME/sf2/SalamanderGrandPiano.sf2}
+[ -f "$SOUNDFONT" ] || SOUNDFONT=
+setsid nohup fluidsynth -a pipewire -m alsa_seq -i -s -z 128 -c 2 -g 0.7 $REVERB $CHORUS "$GM" ${SOUNDFONT:+"$SOUNDFONT"} > "$LOG/fluidsynth.log" 2>&1 < /dev/null &
 sleep 3
 SYNTH=$(aconnect -o | awk -F'[ :]' '/FLUID Synth/ {print $2; exit}')
 aconnect 14:0 "$SYNTH:0" && echo "Midi Through -> FluidSynth ($SYNTH:0)"

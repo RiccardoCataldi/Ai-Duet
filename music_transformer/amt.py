@@ -11,6 +11,8 @@ from anticipation.vocab import AUTOREGRESS, DUR_OFFSET, NOTE_OFFSET, TIME_OFFSET
 from anticipation.convert import midi_to_events, events_to_midi
 from anticipation.sample import safe_logits, future_logits, nucleus
 
+from music_transformer.graphed import GraphedGPT2
+
 
 class AMTGenerator:
     def __init__(self, model_name=None, device=None):
@@ -20,6 +22,8 @@ class AMTGenerator:
                                     else 'stanford-crfm/music-small-800k')
         dtype = torch.float16 if self.device == 'cuda' else torch.float32
         self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype).to(self.device).eval()
+        if self.device == 'cuda':
+            self.model = GraphedGPT2(self.model)   # the same model, a note about three times sooner
 
     def respond(self, midi_in, midi_out, seconds=8, instrument=0, max_prompt_events=150, **sampling):
         events = midi_to_events(midi_in)[-3 * max_prompt_events:]

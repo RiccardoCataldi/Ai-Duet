@@ -6,8 +6,8 @@ The controls beside the piano roll, in four tabs:
 - Your sound, AI sound: yours and the model's in FluidSynth on this laptop (sound.py)
 - Advanced: every knob of the model on its own
 A control is dimmed while what it shapes is not happening (the server says what the model is doing). Drag a slider
-(Shift: finely), click a stepper's arrows, turn the wheel or press the arrow keys over either; a double click puts it
-back. The wheel elsewhere scrolls the tab.
+(Shift: finely), click a stepper's arrows, press the arrow keys or turn the wheel with Ctrl over either; a double click
+puts it back. The wheel scrolls the tab.
 """
 import json
 import math
@@ -392,9 +392,9 @@ class Panel:
         if event.type == pygame.MOUSEWHEEL:
             x, y = pygame.mouse.get_pos()
             target = self._at((x - origin[0], y - origin[1]))
-            if target and target[0] in ('slider', 'stepper'):
-                knob = target[1]
-                knob.set(knob.value + event.y * knob.step())
+            if pygame.key.get_mods() & pygame.KMOD_CTRL:   # only on purpose: scrolling past a control leaves it be
+                if target and target[0] in ('slider', 'stepper'):
+                    target[1].set(target[1].value + event.y * target[1].step())
             elif target or self.content.collidepoint(x - origin[0], y - origin[1]):
                 self._scroll(-event.y * 48)
             return
@@ -628,7 +628,7 @@ class Panel:
         elif self.hover and self.hover[0] == 'preset':
             title, what = capital(self.hover[1][0]), capital(self.hover[1][1])
         else:
-            text(surface, 'Drag, scroll or use the arrow keys on a control', 12, MUTED, (PAD, y + 18))
+            text(surface, 'Drag, Ctrl+scroll or use the arrow keys on a control', 12, MUTED, (PAD, y + 18))
             text(surface, 'Shift: finely  ·  double click: back to its default', 12, MUTED, (PAD, y + 36))
             text(surface, 'F fullscreen  ·  K hide the panel  ·  Esc quit', 12, FAINT, (PAD, y + 62))
             return

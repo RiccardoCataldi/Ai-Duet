@@ -31,6 +31,7 @@ BASS = 0.15      # how much the lowest sounding note says the chord's root is
 
 STAY = 0.97      # chance per note that the key stays: lower follows a modulation sooner but flickers on passing notes
 SHARPNESS = 2.0  # how much one note says about the key
+SURE = 0.6       # how likely a key must be before it is the one it says you are in: lower flickers between neighbours
 FAR = 0.6        # each step round the circle of fifths makes a modulation there about 1.8 times less likely
 CHORD_S = 0.4    # half-life of the notes that make the chord
 PULSE_S = 6.0    # seconds of your onsets the pulse is read from
@@ -86,6 +87,7 @@ class Listener:
         self.move = MOVE
         self.forced = None      # (root, scale in FORCED) it keeps to instead of your key
         self.tempo = None       # seconds a beat of a tempo you fix lasts, its beats from time 0 on; None: your pulse
+        self.said = None        # the key it says you are in (said_key)
 
     def stay(self, stay):
         """Sets STAY for this listener."""
@@ -103,6 +105,8 @@ class Listener:
         """Your note. Once release() has been heard, it sounds on past `duration` until its own release() comes."""
         belief = (self.belief @ self.move) * np.exp(EMIT[:, pitch % 12])
         self.belief = belief / belief.sum()
+        if self.belief.max() > SURE:
+            self.said = int(self.belief.argmax())
         self.notes = [n for n in self.notes if n[0] > onset - KEEP_S] + [(onset, duration, pitch)]
         self.held = {n for n in self.held if n[0] > onset - KEEP_S} | ({(onset, pitch)} if self.releases else set())
 
@@ -116,6 +120,11 @@ class Listener:
         """(key, how likely): 0-11 major from C, 12-23 minor."""
         k = int(self.belief.argmax())
         return k, float(self.belief[k])
+
+    def said_key(self):
+        """The key it says you are in: the likeliest once it is surer than SURE, kept while none is; None before.
+        What it plays leans on all the keys you may be in (in_key), this is only what it tells you."""
+        return self.said
 
     @staticmethod
     def name(key):

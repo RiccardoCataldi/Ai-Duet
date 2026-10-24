@@ -127,16 +127,20 @@ class PanelTest(unittest.TestCase):
         self.click((box.x + 5, box.centery))
         self.assertEqual(self.engine.calls[-1], (0, 'instrument', 1))
 
-    def test_the_wheel_turns_a_control_under_it_and_scrolls_elsewhere(self):
+    def test_the_wheel_scrolls_over_a_control_and_ctrl_wheel_turns_it(self):
         from unittest import mock
         track = self.target('slider', 'volume')
+        wheel = lambda y: self.panel.handle(self.pygame.event.Event(self.pygame.MOUSEWHEEL, x=0, y=y), (0, 0))
+        calls = len(self.engine.calls)
         with mock.patch('pygame.mouse.get_pos', return_value=track.center):
-            self.panel.handle(self.pygame.event.Event(self.pygame.MOUSEWHEEL, x=0, y=1), (0, 0))
+            wheel(-1)
+            self.assertEqual(len(self.engine.calls), calls)   # scrolling down over it leaves it be
+            self.assertGreater(self.panel.scroll[1], 0)
+            scrolled = self.panel.scroll[1]
+            with mock.patch('pygame.key.get_mods', return_value=self.pygame.KMOD_LCTRL):
+                wheel(1)
         self.assertEqual(self.engine.calls[-1][1], 'volume')
-        self.assertEqual(self.panel.scroll[1], 0)
-        with mock.patch('pygame.mouse.get_pos', return_value=(knobs.PAD, knobs.HEADER_H + 4)):
-            self.panel.handle(self.pygame.event.Event(self.pygame.MOUSEWHEEL, x=0, y=-1), (0, 0))
-        self.assertGreater(self.panel.scroll[1], 0)
+        self.assertEqual(self.panel.scroll[1], scrolled)
 
 
 class DummyEngine:
