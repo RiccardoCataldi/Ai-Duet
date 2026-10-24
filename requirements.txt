@@ -1,13 +1,10 @@
-midi2audio==0.1.1
-mido==1.3.2
-music21==7.1.0
-numpy==1.22.4
-pyo==1.0.5
-PyQt5==5.15.10
-PyQt5_sip==12.13.0
-python-rtmidi==1.5.0
-tensorflow==2.7.4
-wandb==0.12.21
+# laptop: the keyboard, the sound and the piano roll
+mido
+python-rtmidi
+pygame
+imageio-ffmpeg
+# the model's server (on a Jetson, torch comes from NVIDIA: make the venv with --system-site-packages)
+numpy
 torch>=2.0.1
 transformers>=4.29.2
 anticipation @ git+https://github.com/jthickstun/anticipation.git
