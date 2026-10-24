@@ -64,9 +64,10 @@ MACROS = [
 # model's knobs it sets (one any other preset sets and it leaves out goes back to its default)
 PRESETS = [
     ('duet', "the duo's defaults: it comps while you play, answers your phrases and plays on when you rest", {}, {}),
-    ('call & response', "it keeps quiet while you play, then answers each phrase soon, close to your intervals, and "
-                        "takes the melody",
-     {'dialogue': 1.0, 'role': 0.75, 'density': 0.6, 'focus': 0.2}, {'space': 150, 'chord': 1, 'hands': 1}),
+    ('call & response', "it keeps quiet while you play, then answers each phrase at once with a run built on your "
+                        "intervals, and takes the melody",
+     {'dialogue': 1.0, 'role': 0.75, 'density': 0.9, 'risk': 0.65, 'focus': 0.6},
+     {'space': 150, 'chord': 1, 'hands': 1, 'echo': 3.0, 'run': 30}),
     ('it comps', "it plays the harmony, low and steady with both hands, and keeps comping when you rest: you improvise",
      {'role': 0.0, 'dialogue': 0.0, 'density': 0.4, 'harmony': 0.4, 'groove': 1.0, 'risk': 0.3, 'key follow': 0.3},
      {'chord': 4, 'solo_chord': 4, 'hands': 2, 'lowest': 2, 'highest': 4}),
@@ -82,7 +83,7 @@ MODES = {'listening': 'waiting for you to play', 'accompanying': 'accompanying y
 
 # the sections of the tabs: the model's knobs on the AI mind tab and in Advanced, and each one's sound
 REGISTER = ('lowest', 'highest', 'root', 'scale', 'bpm', 'metronome')
-ADVANCED = [('Timing', ('min_step', 'space', 'max_rest', 'left_step', 'answer', 'grid')),
+ADVANCED = [('Timing', ('min_step', 'space', 'max_rest', 'run', 'left_step', 'answer', 'grid')),
             ('Harmony', ('out_of_key', 'chord_tone', 'tension', 'stay')),
             ('Texture', ('chord', 'solo_chord', 'hands', 'no_repeat')),
             ('Role & dialogue', ('apart', 'lead', 'echo')),

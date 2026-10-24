@@ -332,6 +332,21 @@ class DuoSessionTest(unittest.TestCase):
         onsets = [onset for onset, *_ in notes]
         self.assertLessEqual(max(b - a for a, b in zip([3.0] + onsets, onsets)), 6.0 + 1e-9)
 
+    def test_it_answers_your_phrase_in_a_run_and_sequences_your_intervals_past_its_end(self):
+        self.session.turn(run=10, min_step=5, max_rest=600, hands=1, echo=6.0, answer=1000)
+        for i, pitch in enumerate((60, 62, 64)):
+            self.session.hear(i * 0.25, 0.2, pitch)
+        self.clock.t = 1.5   # your phrase has ended: it answers
+        notes = []
+        while len(notes) < 12:
+            notes += self.fill()
+            self.clock.t += 0.5
+        onsets = [onset for onset, *_ in notes]
+        self.assertLessEqual(max(b - a for a, b in zip(onsets, onsets[1:])), 0.1 + 1e-9)
+        pitches = [pitch for *_, pitch, _ in notes]
+        steps = [b - a for a, b in zip(pitches, pitches[1:])]
+        self.assertGreater(sum(1 <= step <= 3 for step in steps[2:]), len(steps[2:]) / 2)   # your steps up, bent into C
+
     def test_it_colours_your_chord_with_its_tensions_even_outside_your_key(self):
         for pitch in (48, 52, 55, 59):   # Cmaj7, C in the bass
             self.session.hear(0.0, 2.0, pitch)

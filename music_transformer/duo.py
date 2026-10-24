@@ -36,7 +36,8 @@ CHORD_TONE = 1.0  # logit added to the tones of the chord you are playing
 TENSION = 1.0     # logit added to the tensions of that chord (its 9th, 11th or #11th, 13th), as a jazz pianist colours it
 OUT_OF_KEY = 2.0  # logit taken from a pitch class outside your key; in between while you are modulating
 ANSWER = 400      # ticks after your phrase ends in which it answers it, following its intervals
-ECHO = 3.0        # logit added to the pitch that continues your phrase's intervals
+ECHO = 3.0        # logit added to the pitch that continues your phrase's intervals, over and over as a sequence
+RUN = MAX_REST    # ticks: the longest silence it may leave while it answers; low, it answers in a run of notes
 GRID = 2          # ticks off your pulse that its onsets may land (your beat while you play, your tatum otherwise)
 WINDOW = 2000     # ticks of the duo the model keeps hearing when the context fills up or the clock runs out
 KEEP = 600        # tokens kept at most in that case
@@ -73,6 +74,7 @@ KNOBS = {
     'lead': (LEAD, 0.0, 6.0, '', "how firmly it takes the melody, up where yours was, when you rest"),
     'answer': (ANSWER, 0, 1000, 'ticks', "how long after your phrase it answers it"),
     'echo': (ECHO, 0.0, 6.0, '', "how closely its answer follows your intervals"),
+    'run': (RUN, 5, LONGEST_REST, 'ticks', "the longest silence it may leave while it answers: low, it answers in a run"),
     'grid': (GRID, 0, 20, 'ticks', "how far off your pulse its onsets may land"),
     'stay': (STAY, 0.80, 0.995, '', "how sure it must be you modulated (lower = sooner)"),
     'no_repeat': (NO_REPEAT, 2, 8, 'notes', "the length of runs it may not repeat"),
@@ -94,7 +96,7 @@ KNOBS = {
 IN_EFFECT = {
     'listening': set(),
     'accompanying': {'space', 'chord', 'apart'},                   # you are playing
-    'answering': {'min_step', 'solo_chord', 'lead', 'answer', 'echo'},   # your phrase just ended
+    'answering': {'min_step', 'solo_chord', 'lead', 'answer', 'echo', 'run'},   # your phrase just ended
     'alone': {'min_step', 'solo_chord', 'lead', 'answer'},         # you rest, and it has answered
 }
 ALWAYS = {'out_of_key', 'chord_tone', 'tension', 'stay', 'no_repeat', 'memory', 'max_rest', 'temperature', 'top_p',
@@ -217,8 +219,9 @@ class DuoSession:
         self._fit()
         now, last = self.now(), self._last_time()
         you_play = self.heard_at is not None and now - self.heard_at < PLAYING
+        answering = self.heard_at is not None and not you_play and now - self.heard_at < self.answer
         earliest = max(last, now + MARGIN)
-        latest = min(max(earliest, last + self.max_rest), MAX_TIME - 1)
+        latest = min(max(earliest, last + (min(self.max_rest, self.run) if answering else self.max_rest)), MAX_TIME - 1)
         # when each hand may play next: (instrument, its line, its register, its onsets as a mask over times)
         hands = []
         for instrument, step, most, register in self._hands(you_play):
@@ -298,8 +301,9 @@ class DuoSession:
         if not you_play and right and line and tick - self.heard_at < self.answer:
             phrase = self.listener.phrase(at)
             answered = sum(time_ > self.heard_at for time_, _ in line)
-            if 0 < answered < len(phrase):
-                echo = (line[-1][1] - NOTE_OFFSET) % MAX_PITCH + phrase[answered] - phrase[answered - 1]
+            if answered > 0 and len(phrase) > 1:   # past your phrase's end it plays its intervals again, a sequence
+                step = (answered - 1) % (len(phrase) - 1) + 1
+                echo = (line[-1][1] - NOTE_OFFSET) % MAX_PITCH + phrase[step] - phrase[step - 1]
                 if in_key[echo % 12] < 0.5:   # your interval, bent into your key as a sequence would be
                     echo += 1 if in_key[(echo + 1) % 12] >= in_key[(echo - 1) % 12] else -1
                 if 0 <= echo < MAX_PITCH:
